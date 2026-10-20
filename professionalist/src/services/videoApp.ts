@@ -23,18 +23,30 @@
 
 import { subscribeSessionExpired } from "./videoHttp";
 
-export interface VideoSession {  userId: string | null;
+export interface VideoSession {
+  userId: number | null;
   displayName: string | null;
   isAuthenticated: boolean;
   /** Whether a bearer token is available; drives the request's Authorization header. */
   hasToken: boolean;
 }
 
+/** Why a viewer asked for a video to be taken down (kept short; sent as the report note). */
+export type VideoReportReason = "spam" | "harassment" | "nsfw" | "misinformation" | "other";
+
 export interface VideoAppBridge {
   getSession(): VideoSession;
   /** Sends an unauthenticated visitor to the app's existing login screen. */
   requireLogin(returnTo: string): void;
-  toggleFollow(userId: string, follow: boolean): Promise<{ viewerFollows: boolean } | void>;
+  toggleFollow(userId: number, follow: boolean): Promise<{ following: boolean } | void>;
+  /**
+   * Per-creator safety actions. The videos contract does NOT define these routes
+   * (docs/videos-api-contract.md has no report/block/mute surface), so the defaults
+   * below fail with a clear message and the app injects real implementations — the
+   * existing app owns user blocks/mutes outside /api/videos.
+   */
+  reportVideo(videoId: number, reason: VideoReportReason, note?: string): Promise<void>;
+  blockUser(userId: number): Promise<void>;
   /** Share a link; resolves true when the user actually completed a share action. */
   share(input: { url: string; title: string; text?: string }): Promise<boolean>;
   subscribeSessionExpired(listener: () => void): () => void;
@@ -50,7 +62,7 @@ function readToken(): string | null {
   }
 }
 
-async function defaultToggleFollow(userId: string, follow: boolean): Promise<void> {
+async function defaultToggleFollow(userId: number, follow: boolean): Promise<{ following: boolean }> {
   const token = readToken();
   const base = ((import.meta.env.VITE_API_URL as string | undefined) ?? "").replace(/\/+$/, "");
   const res = await fetch(`${base}${follow ? "/api/network/follow" : "/api/network/unfollow"}`, {
@@ -65,6 +77,20 @@ async function defaultToggleFollow(userId: string, follow: boolean): Promise<voi
   if (!res.ok) {
     throw Object.assign(new Error("Follow request failed."), { status: res.status });
   }
+  try {
+    return (await res.json()) as { following: boolean };
+  } catch {
+    return { following: follow };
+  }
+}
+
+/**
+ * Honest default for the safety actions the videos contract does not carry:
+ * refuse with a stable message so the UI shows a real failure path instead of
+ * pretending a write landed. The app overrides these via configureVideoApp().
+ */
+function notWired(action: string): Promise<never> {
+  return Promise.reject(new Error(`${action} is handled by the app's safety flow, which has not been wired into this build yet.`));
 }
 
 const defaultBridge: VideoAppBridge = {
@@ -82,6 +108,8 @@ const defaultBridge: VideoAppBridge = {
     window.location.assign(`${LOGIN_PATH}?next=${next}`);
   },
   toggleFollow: defaultToggleFollow,
+  reportVideo: (videoId) => notWired(`Reporting video ${videoId}`),
+  blockUser: () => notWired("Blocking this creator"),
   async share({ url, title, text }): Promise<boolean> {
     const nav = navigator as Navigator & { share?: (data: ShareData) => Promise<void> };
     if (typeof nav.share === "function") {

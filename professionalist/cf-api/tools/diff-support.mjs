@@ -33,13 +33,39 @@ export const PORT_ROOT = path.join(HERE, "..", "port", "routes");
 export const PROD = { host: "api.proffessionalist.com", port: 443, secure: true };
 export const WORKER = { host: "127.0.0.1", port: 8803, secure: false };
 
+/* Post-flip target overrides (§5.11/§5.13, 2026-10-20).  Phase A originally compared "production"
+   (the api.proffessionalist.com hostname) against the Worker; after the hostname flip both sides
+   were the SAME origin, so a straight re-run would diff the Worker against itself.  These flags
+   un-confuse the sides:
+     --prod-direct  re-point the oracle at the still-running VPS directly (140.245.50.236:80, plain
+                    http, Host: api.proffessionalist.com so nginx routes to the same server block).
+                    The VPS stays read-only for this harness: prodRequest() still only sends
+                    GET/HEAD/OPTIONS without credentials.
+     --worker-live  re-point the Worker side at the DEPLOYED Worker (https://api.proffessionalist.com)
+                    so the run exercises what users actually hit, not the local sandbox.
+   When --worker-live is set the response passes the Cloudflare edge, which injects its own headers
+   (server/cf-ray/nel/report-to/alt-svc/...); EDGE=true makes compareHeaders treat ENV_PROD_ONLY
+   names as environmental on the WORKER side too. */
+let EDGE = false;
+export function applyTargetArgs(argv) {
+  if (argv.includes("--prod-direct")) {
+    PROD.host = "140.245.50.236"; PROD.port = 80; PROD.secure = false;
+    PROD.hostHeader = "api.proffessionalist.com";
+  }
+  if (argv.includes("--worker-live")) {
+    WORKER.host = "api.proffessionalist.com"; WORKER.port = 443; WORKER.secure = true;
+    EDGE = true;
+  }
+  return { edge: EDGE };
+}
+
 /* ------------------------------------------------------------------ *
  *  HTTP clients
  * ------------------------------------------------------------------ */
 function rawRequest(target, method, at, { headers = {}, body, timeoutMs = 60000 } = {}) {
   return new Promise((resolve, reject) => {
     const mod = target.secure ? https : http;
-    const allHeaders = Object.assign({ "user-agent": "professionalist-diff-harness/1.0", host: target.host }, headers);
+    const allHeaders = Object.assign({ "user-agent": "professionalist-diff-harness/1.0", host: target.hostHeader || target.host }, headers);
     if (body != null && !("content-length" in lowerKeys(allHeaders))) {
       allHeaders["Content-Length"] = Buffer.byteLength(body);
     }
@@ -123,10 +149,12 @@ export function headerNames(rawHeaders) {
    ENVIRONMENTAL (measured live: production 404 has it, the Worker's app-level 404 does not; on real
    /uploads 200 responses BOTH set the app's own `public, max-age=604800, immutable`, so that
    difference is not masked). */
-export function compareHeaders(prodRaw, workerRaw, prodStatus) {
+export function compareHeaders(prodRaw, workerRaw, prodStatus, workerStatus = prodStatus) {
   const p = headerCounts(prodRaw), w = headerCounts(workerRaw);
   const issues = [];
-  const envOk = n => ENV_PROD_ONLY.has(n) || (prodStatus === 404 && n === "cache-control");
+  const envOk = n => ENV_PROD_ONLY.has(n)
+    || (prodStatus === 404 && n === "cache-control")
+    || (workerStatus === 404 && n === "cache-control");
   for (const [name, pc] of p) {
     const wc = w.get(name) || 0;
     if (wc === 0) {
@@ -136,7 +164,9 @@ export function compareHeaders(prodRaw, workerRaw, prodStatus) {
     }
   }
   for (const name of w.keys()) {
-    if (!p.has(name)) issues.push(`worker-only header absent on prod: ${name}`);
+    if (!p.has(name) && !(EDGE && ENV_PROD_ONLY.has(name))) {
+      issues.push(`worker-only header absent on prod: ${name}`);
+    }
   }
   return { match: issues.length === 0, issues };
 }
@@ -170,6 +200,9 @@ const FILE_PREFIX = {
   "spa/market.js": "/api",
   "spa/chat.js": "/api",
   "spa/ops.js": "/api/admin/ops",
+  /* app-new/routes/spa/videos.js is mounted on its own base (src/api.js:310, ahead of the
+     catch-all /api line so its "/" and "/:id" do not shadow platform.js). */
+  "spa/videos.js": "/api/videos",
 };
 const ROUTE_FILES = Object.keys(FILE_PREFIX);
 
@@ -188,6 +221,10 @@ export function classifyGroup(endpoint) {
       ? "anonymous-guarded" : "authenticated";
   }
   if (full.startsWith("/api/admin")) return "admin-ops";
+  /* /api/videos is app-new only: the VPS does not serve it, so a prod probe would compare the
+     Worker's real answer against the VPS's 404 fallthrough and call that a defect.  These paths
+     are still enumerated and still exercised — Worker-only, through the authenticated sweep. */
+  if (full.startsWith("/api/videos")) return "worker-only";
   return "authenticated";
 }
 

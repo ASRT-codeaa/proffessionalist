@@ -549,11 +549,12 @@ router.get("/businesses/:id/analytics", handle(async (req, res) => {
     ),
     query(
       `SELECT COALESCE(x.n, 0)::int AS n
-         FROM generate_series(NOW() - INTERVAL '7 weeks', NOW(), INTERVAL '1 week') d(week)
-         LEFT JOIN (SELECT date_trunc('week', created_at) AS week, COUNT(*) AS n
+         FROM (WITH RECURSIVE d(k) AS (SELECT 7 UNION ALL SELECT k - 1 FROM d WHERE k > 0)
+               SELECT strftime('%Y-%m-%dT00:00:00.000Z', 'now', '-' || (d.k * 7) || ' days', 'weekday 0', '-6 days') AS week FROM d) gen
+         LEFT JOIN (SELECT strftime('%Y-%m-%dT00:00:00.000Z', created_at, 'weekday 0', '-6 days') AS week, COUNT(*) AS n
                       FROM posts WHERE company_id = $1 AND deleted_at IS NULL GROUP BY 1) x
-                ON x.week = date_trunc('week', d.week)
-        ORDER BY d.week`,
+                ON x.week = gen.week
+        ORDER BY gen.week`,
       [id]
     ),
     query(

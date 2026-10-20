@@ -1,0 +1,61 @@
+/* ---------------------------------------------------------------------------
+ * landing.css — plain CSS for the landing subtree (NO `@import "tailwindcss"`
+ * here on purpose, so it drops into the real app's stylesheet without pulling a
+ * second Tailwind copy). It mirrors the deployed tokens measured from
+ * dist/assets/index-D2clr9JG.css and provides the only motion the page uses:
+ * a restrained fade-up, fully disabled under prefers-reduced-motion.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --lp-canvas: #f5f6f8;
+  --lp-surface: #ffffff;
+  --lp-surface-2: #eef0f4;
+  --lp-ink: #101828;
+  --lp-ink-soft: #667085;
+  --lp-ink-faint: #98a2b3;
+  --lp-line: #e4e7ec;
+  --lp-line-strong: #d0d5dd;
+  --lp-accent: #1e6fff;
+  --lp-accent-hover: #155ad0;
+  --lp-accent-soft: #e8f0ff;
+  --lp-ring: #1e6fff73;
+  --lp-font: "Inter", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+}
+
+/* Restrained entrance used by <Reveal>. Base state is fully visible so the page
+   is correct even before JS runs or where IntersectionObserver is unavailable. */
+.lp-reveal {
+  opacity: 1;
+  transform: none;
+}
+.lp-reveal[data-lp-hidden="true"] {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.lp-reveal[data-lp-shown="true"] {
+  animation: lp-fade-up 0.5s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  opacity: 1;
+  transform: none;
+}
+
+@keyframes lp-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-reveal,
+  .lp-reveal[data-lp-hidden="true"],
+  .lp-reveal[data-lp-shown="true"] {
+    opacity: 1 !important;
+    transform: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -1,20 +1,36 @@
 /**
  * videos.ts — typed client for the Videos backend.
  *
- * Contract: docs/videos-api-contract.md (authoritative). Every path below is either a
- * documented `/api/videos*` endpoint or an EXISTING `/api/posts*` engagement endpoint —
- * a video is a post, so like/save/share/comment reuse the post routes already used by
- * src/components/PostCard.tsx (`post(id, reaction)`, `save(id, collection)`,
- * `share(id, note)`, `comments(id)`, `addComment(id, text)`).
+ * Contract: docs/videos-api-contract.md (authoritative; implemented by
+ * app-new/routes/spa/videos.js). Every path here is either a documented
+ * `/api/videos*` endpoint (including `/api/videos/admin/*`) or an EXISTING
+ * `/api/posts*` engagement endpoint — a video is a post, so like/save/share/
+ * comment reuse the same routes src/services/feed.ts documents
+ * (`post(id, reaction)`, `save(id, collection)`, `share(id, note)`,
+ * `comments(id)`, `addComment(id, text)`, `deleteComment(id)`).
  *
- * No mock data lives here: every function awaits the server and throws `ApiError`
- * (see videoHttp.ts) with the server's `{ error: { code, message, fields } }` envelope.
+ * Things the contract is explicit about and this file therefore obeys:
+ *  - ids are JSON NUMBERS (`id === 7`), never "4";
+ *  - `durationMs`, `width`, `height`, `thumbnailUrl`, `embedUrl`, `indexedAt`,
+ *    `nextCursor` are nullable;
+ *  - `kind` ∈ upload | link | indexed, `provider` ∈ self | youtube | vimeo | linkedin;
+ *  - `ranking.reasons` is an array of {key, value, weight} objects;
+ *  - there is NO GET /interests and NO /videos/mine: interests are read back through
+ *    the PUT response echo (the UI keeps a local mirror, see videoHooks.ts), and an
+ *    author sees their own pending video through GET /:id;
+ *  - reprocess/approve/remove are staff-only (/admin/:id/…);
+ *  - upload accepts `file` + text fields caption/topics(repeated)/durationMs/width/height;
+ *    `caption` is REQUIRED for uploads; a client-declared author or role is a 400.
+ *
+ * No mock data lives here: every function awaits the server and throws `VideoApiError`
+ * (see videoHttp.ts) carrying the server's `{ error: { code, message, fields } }` envelope.
  */
 
 import { videoHttp, type VideoQuery } from "./videoHttp";
 
 export type VideoTab = "for-you" | "following" | "trending";
 
+/** Exactly the events the activity route accepts (anything else → 400 fields.event). */
 export type VideoActivityEvent =
   | "view_start"
   | "watch"
@@ -22,23 +38,34 @@ export type VideoActivityEvent =
   | "like"
   | "save"
   | "share"
+  | "follow_from_video"
   | "impression";
 
-export type VideoProvider = "upload" | "youtube" | "vimeo" | "external";
+export type VideoKind = "upload" | "link" | "indexed";
+export type VideoProvider = "self" | "youtube" | "vimeo" | "linkedin";
+export type VideoModerationState = "pending" | "approved" | "removed";
+export type VideoAvailability = "ok" | "unavailable";
 
-export type VideoModerationState =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "reprocessing"
-  | "removed";
+/** The six ranking keys the Worker scores with (video_rank_config). */
+export type VideoRankingKey =
+  | "interest_relevance"
+  | "watch_completion"
+  | "engagement"
+  | "followed_creators"
+  | "quality_freshness"
+  | "diversity_discovery";
 
 export interface VideoAuthor {
-  id: string;
+  id: number;
+  /** "" when absent — the contract guarantees empty string, never null. */
   name: string;
-  headline?: string | null;
-  avatarUrl?: string | null;
-  viewerFollows?: boolean | null;
+  headline: string;
+  avatarUrl: string | null;
+  viewerFollows: boolean | null;
+  /** Present when the DTO is a full `Person` (comment authors). */
+  username?: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 export interface VideoStats {
@@ -54,149 +81,234 @@ export interface VideoViewer {
   saved: boolean;
 }
 
+export interface VideoRankingReason {
+  key: string;
+  value: number;
+  weight: number;
+}
+
 export interface VideoRanking {
   score: number;
-  reasons: string[];
+  reasons: VideoRankingReason[];
 }
 
 /** VIDEO_ITEM, exactly as documented. */
 export interface VideoItem {
-  id: string;
-  postId: string;
-  kind: string;
+  id: number;
+  postId: number;
+  kind: VideoKind | string;
   provider: VideoProvider | string;
-  playUrl: string | null;
+  playUrl: string;
+  /** Present on kind:"link" rows the server could build an embed for (youtube, vimeo). */
+  embedUrl?: string | null;
+  canonicalUrl?: string;
   thumbnailUrl: string | null;
-  durationMs: number;
-  width: number;
-  height: number;
+  durationMs: number | null;
+  width: number | null;
+  height: number | null;
   caption: string;
   hashtags: string[];
+  /** Topic slugs ("hiring"), never display names. */
   topics: string[];
   author: VideoAuthor;
   stats: VideoStats;
   viewer: VideoViewer;
   createdAt: string;
-  ranking?: VideoRanking | null;
+  ranking: VideoRanking | null;
+}
+
+/** GET /:id and POST / add these to VIDEO_ITEM; `comments` is inline on both. */
+export interface VideoDetail extends VideoItem {
+  canonicalUrl: string;
+  embedUrl: string | null;
+  moderationState: VideoModerationState | string;
+  availability: VideoAvailability | string;
+  indexedAt: string | null;
+  comments: VideoComment[];
 }
 
 export interface VideoFeedPage {
   items: VideoItem[];
   nextCursor: string | null;
+  tab: VideoTab;
 }
 
+export interface VideoSearchPage {
+  items: VideoItem[];
+  nextCursor: string | null;
+  query: string;
+  total: number;
+}
+
+/** The `toComment` DTO used by /api/posts/:id/comments and GET /videos/:id. */
 export interface VideoComment {
-  id: string;
-  text: string;
+  id: number;
+  postId: number;
   author: VideoAuthor;
+  text: string;
+  likeCount: number;
+  liked: boolean;
   createdAt: string;
-  likeCount?: number;
-  likedByViewer?: boolean;
 }
 
-export interface VideoCommentPage {
-  items: VideoComment[];
-  nextCursor?: string | null;
+/* ------------------------------------------------------------------ *
+ * Topics / interests (contract shapes: slug-based, PUT-only)
+ * ------------------------------------------------------------------ */
+
+export interface VideoTopic {
+  id: number;
+  slug: string;
+  name: string;
+  parentId: number | null;
 }
 
-export interface VideoDetail extends VideoItem {
-  comments: VideoCommentPage;
-}
-
-/** A creator's own upload plus its moderation lifecycle. */
-export interface OwnVideo {
-  id: string;
-  postId: string;
-  title: string;
-  caption: string;
-  topics: string[];
-  provider: string;
-  playUrl: string | null;
-  thumbnailUrl: string | null;
-  durationMs: number;
-  moderationState: VideoModerationState | string;
-  moderationReason?: string | null;
-  stats?: Partial<VideoStats>;
-  createdAt: string;
-  updatedAt?: string | null;
-}
-
-export interface VideoInterest {
-  topic: string;
-  /** 0..1 relevance weight the server feeds into recommendations. */
+/** What PUT /interests echoes back — the only way to read saved interests. */
+export interface VideoSavedInterest {
+  slug: string;
+  name: string;
   weight: number;
+  updatedAt: string | null;
+}
+
+export interface InterestsResult {
+  ok: boolean;
+  topics: VideoSavedInterest[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Admin surface (staff-only; deny-by-default 401/403)
+ * ------------------------------------------------------------------ */
+
+export interface AdminVideoRow extends VideoItem {
+  moderationState: string;
+  availability: string;
+  canonicalUrl: string;
+  sourceUserId: number | null;
+  indexedAt: string | null;
+  lastCheckedAt: string | null;
+}
+
+export interface RankConfigItem {
+  key: string;
+  weight: number;
+  updatedAt: string | null;
+}
+
+export interface RankConfig {
+  items: RankConfigItem[];
+  weights: Record<VideoRankingKey, number>;
+  sum: number;
+}
+
+export interface VideoSource {
+  id: number;
+  kind: "rss" | "sitemap" | "allowlist" | string;
+  url: string;
+  provider: string;
+  enabled: boolean;
+  robotsRespected: boolean;
+  lastRunAt: string | null;
+  etag: string | null;
+  createdAt: string;
+}
+
+export type DiscoveryOutcome =
+  | "indexed"
+  | "duplicate"
+  | "provider_denied"
+  | "scheme_denied"
+  | "robots_denied"
+  | "rejected";
+
+export interface DiscoveryRunResult {
+  processed: number;
+  indexed: number[];
+  duplicates: number;
+  refused: number;
+  outcomes: { url: string; outcome: DiscoveryOutcome | string; videoId: number | null; detail: string | null }[];
+  sourceId: number | null;
+  ranAt: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Request payload types
+ * ------------------------------------------------------------------ */
+
+export interface ActivityPayload {
+  event: VideoActivityEvent;
+  value_ms?: number | null;
+  value_num?: number | null;
+  /** Required, 1–120 chars; replays are stored once, never an error. */
+  dedupe_key: string;
+}
+
+export interface ActivityResult {
+  recorded: boolean;
+  deduped: boolean;
+  videoId: number;
+  event: VideoActivityEvent;
 }
 
 export interface CreateVideoByLinkInput {
   url: string;
-  title?: string;
   caption?: string;
   topics?: string[];
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  /** External https thumbnail URL only (the server canonicalises it). */
+  thumbnailUrl?: string | null;
 }
 
 export interface CreateVideoUploadInput {
   file: File;
-  title?: string;
-  caption?: string;
+  /** Required for uploads — the server answers 400 fields.caption without it. */
+  caption: string;
   topics?: string[];
-  thumbnail?: File | Blob | null;
-}
-
-export interface ActivityPayload {
-  event: VideoActivityEvent;
-  value_ms?: number;
-  value_num?: number;
-  dedupe_key: string;
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  hashtags?: string[];
 }
 
 export interface LikeResult {
   liked: boolean;
   likeCount: number;
-  reaction?: string | null;
+  reaction: string | null;
 }
 
 export interface SaveResult {
   saved: boolean;
-  saveCount?: number;
 }
 
-/**
- * Server-side limits, mirrored for *advisory* client preflight only.
- * The server is always the authority: POST /api/videos re-validates everything and the
- * UI surfaces that envelope verbatim (see CreateVideoPage). Values are the documented
- * defaults for the videos contract; adjust here (single source) if the contract moves.
- */
+export interface ShareResult {
+  shareCount: number;
+}
+
+/* ------------------------------------------------------------------ *
+ * Server-side limits, mirrored for client-side preflight only.
+ * The server is always the authority (docs: "a client-side check is
+ * never the reason for a rejection") — values below are the documented
+ * answers of POST /api/videos.
+ * ------------------------------------------------------------------ */
 export const VIDEO_LIMITS = {
-  maxUploadBytes: 100 * 1024 * 1024,
-  minDurationMs: 3_000,
-  maxDurationMs: 15 * 60_000,
-  maxTitleLength: 80,
-  maxCaptionLength: 2_200,
-  maxHashtags: 12,
-  maxTopics: 5,
+  /** "Keep each file under 12 MB." */
+  maxUploadBytes: 12 * 1024 * 1024,
+  /** multer shim accepts video/mp4 | video/webm | video/quicktime. */
   acceptedUploadTypes: ["video/mp4", "video/webm", "video/quicktime"] as string[],
-  acceptedExtensions: [".mp4", ".mov", ".webm", ".m4v"] as string[],
-  minWidth: 240,
-  minHeight: 240,
+  acceptedExtensions: [".mp4", ".webm", ".mov", ".m4v"] as string[],
+  /** caption longer than 2000 chars is truncated by the server (no error). */
+  maxCaptionLength: 2_000,
+  /** interests: "Pick up to 24 topics"; weight 0..1. */
+  maxTopics: 24,
+  /** search: q is 1..80 chars, longer is truncated. */
+  maxSearchLength: 80,
+  /** feed/search limit is clamped to 1..30 by the server. */
+  maxPageSize: 30,
+  /** dedupe_key: 1..120 chars. */
+  maxDedupeKeyLength: 120,
+  valueUpperBoundMs: 86_400_000,
 } as const;
-
-/** Canonical topic vocabulary for interests; the server response extends it. */
-export const VIDEO_TOPICS = [
-  "Career advice",
-  "Business & finance",
-  "Marketing",
-  "Design",
-  "Engineering",
-  "Productivity",
-  "Leadership",
-  "Sales",
-  "Founder stories",
-  "Hiring & interviews",
-  "Data & AI",
-  "Personal finance",
-] as const;
-
-export const VIDEO_TOPIC_OPTIONS: string[] = [...VIDEO_TOPICS];
 
 const http = () => videoHttp();
 
@@ -210,234 +322,176 @@ export function getFeed(params: { tab: VideoTab; cursor?: string | null; limit?:
   return http().get<VideoFeedPage>("/api/videos/feed", query);
 }
 
-export function searchVideos(q: string): Promise<VideoFeedPage> {
-  return http().get<VideoFeedPage>("/api/videos/search", { q });
+export function searchVideos(q: string, cursor?: string | null): Promise<VideoSearchPage> {
+  const query: VideoQuery = { q: q.slice(0, VIDEO_LIMITS.maxSearchLength), limit: 10 };
+  if (cursor) query.cursor = cursor;
+  return http().get<VideoSearchPage>("/api/videos/search", query);
 }
 
-export function getVideo(id: string): Promise<VideoDetail> {
-  return http().get<VideoDetail>(`/api/videos/${encodeURIComponent(id)}`);
+/** Visible when approved+ok, or the viewer is the author (pending OK), or staff. */
+export function getVideo(id: number): Promise<VideoDetail> {
+  return http().get<VideoDetail>(`/api/videos/${id}`);
+}
+
+export function getTopics(): Promise<{ items: VideoTopic[] }> {
+  return http().get<{ items: VideoTopic[] }>("/api/videos/topics");
 }
 
 /* ------------------------------------------------------------------ *
  * Creation
  * ------------------------------------------------------------------ */
 
-export function createVideoByLink(input: CreateVideoByLinkInput): Promise<OwnVideo> {
-  return http().post<OwnVideo>("/api/videos", {
+export function createVideoByLink(input: CreateVideoByLinkInput): Promise<VideoDetail> {
+  return http().post<VideoDetail>("/api/videos", {
     url: input.url.trim(),
-    title: input.title?.trim() || undefined,
     caption: input.caption?.trim() || undefined,
     topics: input.topics?.length ? input.topics : undefined,
+    durationMs: input.durationMs ?? undefined,
+    width: input.width ?? undefined,
+    height: input.height ?? undefined,
+    thumbnailUrl: input.thumbnailUrl ?? undefined,
   });
 }
 
 export function createVideoUpload(
   input: CreateVideoUploadInput,
   options?: { signal?: AbortSignal; onProgress?: (loaded: number, total: number) => void },
-): Promise<OwnVideo> {
+): Promise<VideoDetail> {
   const form = new FormData();
   form.append("file", input.file, input.file.name);
-  form.append("kind", "video");
-  if (input.title) form.append("title", input.title.trim());
-  if (input.caption) form.append("caption", input.caption.trim());
-  if (input.topics?.length) form.append("topics", input.topics.join(","));
-  if (input.thumbnail) form.append("thumbnail", input.thumbnail, "thumbnail.jpg");
-  return http().upload<OwnVideo>("/api/videos", form, { signal: options?.signal, onProgress: options?.onProgress });
-}
-
-export function listMyVideos(params?: { cursor?: string | null; limit?: number }): Promise<{
-  items: OwnVideo[];
-  nextCursor: string | null;
-}> {
-  return http().get("/api/videos/mine", { cursor: params?.cursor, limit: params?.limit ?? 20 });
-}
-
-/** Re-run the ingest pipeline after a failed transcode / provider fetch. */
-export function reprocessVideo(id: string): Promise<OwnVideo> {
-  return http().post<OwnVideo>(`/api/videos/${encodeURIComponent(id)}/reprocess`);
-}
-
-export function removeVideo(id: string): Promise<void> {
-  return http().del<void>(`/api/videos/${encodeURIComponent(id)}`);
+  form.append("caption", input.caption.trim());
+  // the contract accepts topics "repeated or JSON array string" — repeated fields it is.
+  for (const slug of input.topics ?? []) form.append("topics", slug);
+  if (input.durationMs != null) form.append("durationMs", String(input.durationMs));
+  if (input.width != null) form.append("width", String(input.width));
+  if (input.height != null) form.append("height", String(input.height));
+  for (const tag of input.hashtags ?? []) form.append("hashtags", tag);
+  return http().upload<VideoDetail>("/api/videos", form, { signal: options?.signal, onProgress: options?.onProgress });
 }
 
 /* ------------------------------------------------------------------ *
- * Activity (real watch time; idempotent server-side thanks to dedupe_key)
+ * Activity (real watch time; idempotent server-side via dedupe_key)
  * ------------------------------------------------------------------ */
 
-export function postActivity(videoId: string, payload: ActivityPayload): Promise<{ accepted: boolean }> {
-  return http().post<{ accepted: boolean }>(`/api/videos/${encodeURIComponent(videoId)}/activity`, payload);
+export function postActivity(videoId: number, payload: ActivityPayload): Promise<ActivityResult> {
+  return http().post<ActivityResult>(`/api/videos/${videoId}/activity`, payload);
 }
 
 /* ------------------------------------------------------------------ *
- * Interests
+ * Interests — PUT replaces the whole set and echoes it back; there is no GET.
  * ------------------------------------------------------------------ */
 
-export function getInterests(): Promise<{ items: VideoInterest[] }> {
-  return http().get<{ items: VideoInterest[] }>("/api/videos/interests");
-}
-
-export function putInterests(items: VideoInterest[]): Promise<{ items: VideoInterest[] }> {
-  return http().put<{ items: VideoInterest[] }>("/api/videos/interests", { items });
+export function putInterests(topics: { slug: string; weight: number }[]): Promise<InterestsResult> {
+  return http().put<InterestsResult>("/api/videos/interests", { topics });
 }
 
 /* ------------------------------------------------------------------ *
- * Engagement — existing post endpoints (no new surface invented)
+ * Engagement — existing post endpoints (a video IS a post; no new surface)
  * ------------------------------------------------------------------ */
 
-export function likeVideo(postId: string, reaction?: string | null): Promise<LikeResult> {
-  return http().post<LikeResult>(`/api/posts/${encodeURIComponent(postId)}/like`, {
-    reaction: reaction ?? undefined,
-  });
+export function likeVideo(postId: number, reaction?: "like" | null): Promise<LikeResult> {
+  return http().post<LikeResult>(`/api/posts/${postId}/like`, { reaction: reaction ?? null });
 }
 
-export function saveVideo(postId: string, collection?: string | null): Promise<SaveResult> {
-  return http().post<SaveResult>(`/api/posts/${encodeURIComponent(postId)}/save`, {
-    collection: collection ?? undefined,
-  });
+export function saveVideo(postId: number, collection?: string | null): Promise<SaveResult> {
+  return http().post<SaveResult>(`/api/posts/${postId}/save`, { collection: collection ?? null });
 }
 
-export function shareVideo(postId: string, note?: string | null): Promise<{ shareCount?: number }> {
-  return http().post<{ shareCount?: number }>(`/api/posts/${encodeURIComponent(postId)}/share`, {
-    note: note ?? undefined,
-  });
+export function shareVideo(postId: number, note?: string | null): Promise<ShareResult> {
+  return http().post<ShareResult>(`/api/posts/${postId}/share`, { note: note ?? null });
 }
 
-export function getVideoComments(postId: string, cursor?: string | null): Promise<VideoCommentPage> {
-  return http().get<VideoCommentPage>(`/api/posts/${encodeURIComponent(postId)}/comments`, { cursor });
+/** GET /api/posts/:id/comments answers a plain array (oldest first), see feed.ts. */
+export function getVideoComments(postId: number): Promise<VideoComment[]> {
+  return http().get<VideoComment[]>(`/api/posts/${postId}/comments`);
 }
 
-export function addVideoComment(postId: string, text: string): Promise<VideoComment> {
-  return http().post<VideoComment>(`/api/posts/${encodeURIComponent(postId)}/comments`, { text });
+export function addVideoComment(postId: number, text: string): Promise<VideoComment> {
+  return http().post<VideoComment>(`/api/posts/${postId}/comments`, { text });
 }
 
-export function deleteVideoComment(commentId: string): Promise<void> {
-  return http().del<void>(`/api/posts/comments/${encodeURIComponent(commentId)}`);
-}
-
-/**
- * Duplicate check for the "Add a video" link flow. Uses the documented search endpoint
- * (no separate duplicate route exists in the contract) and is strictly advisory: the
- * server still rejects true duplicates on POST /api/videos.
- */
-export async function findLikelyDuplicate(url: string): Promise<VideoItem | null> {
-  const normalized = normalizeVideoUrl(url);
-  if (!normalized) return null;
-  try {
-    const page = await searchVideos(normalized);
-    const videoId = extractProviderVideoId(normalized);
-    return (
-      page.items.find((item) => {
-        const itemUrl = normalizeVideoUrl(item.playUrl ?? "");
-        return (!!videoId && !!extractProviderVideoId(itemUrl) && extractProviderVideoId(itemUrl) === videoId) ||
-          itemUrl === normalized;
-      }) ?? null
-    );
-  } catch {
-    // Advisory only: a failed search must never block the create flow.
-    return null;
-  }
+export function deleteVideoComment(commentId: number): Promise<{ ok: boolean }> {
+  return http().del<{ ok: boolean }>(`/api/posts/comments/${commentId}`);
 }
 
 /* ------------------------------------------------------------------ *
- * URL helpers (link canonicalisation preview)
+ * Admin (staff): /api/videos/admin/* — deny-by-default, audited server-side.
  * ------------------------------------------------------------------ */
 
-export interface CanonicalisedLink {
-  input: string;
-  canonicalUrl: string | null;
-  provider: VideoProvider | null;
-  providerVideoId: string | null;
-  /** Short human reason shown next to the preview, or null when the link looks usable. */
-  issue: string | null;
+export function adminIndex(params: {
+  state: "pending" | "approved" | "removed" | "all";
+  cursor?: string | null;
+  limit?: number;
+}): Promise<{ items: AdminVideoRow[]; total: number; nextCursor: string | null; state: string }> {
+  const query: VideoQuery = { state: params.state, limit: params.limit ?? 10 };
+  if (params.cursor) query.cursor = params.cursor;
+  return http().get("/api/videos/admin/index", query);
 }
 
-const YOUTUBE_PATTERNS = [
-  /youtube\.com\/watch\?v=([\w-]{6,20})/i,
-  /youtube\.com\/shorts\/([\w-]{6,20})/i,
-  /youtu\.be\/([\w-]{6,20})/i,
-  /youtube\.com\/embed\/([\w-]{6,20})/i,
-  /youtube\.com\/live\/([\w-]{6,20})/i,
-];
-
-export function normalizeVideoUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    const url = new URL(withScheme);
-    url.hash = "";
-    // Drop tracking noise that does not identify the video.
-    for (const junk of ["si", "feature", "t", "start", "end", "list_type", "utm_source", "rel"]) {
-      url.searchParams.delete(junk);
-    }
-    return url.toString();
-  } catch {
-    return null;
-  }
+export interface AdminStateResult {
+  ok: boolean;
+  videoId: number;
+  moderationState: string;
+  availability?: string;
+  changed?: boolean;
 }
 
-export function extractProviderVideoId(rawUrl: string): string | null {
-  const url = normalizeVideoUrl(rawUrl);
-  if (!url) return null;
-  for (const pattern of YOUTUBE_PATTERNS) {
-    const match = pattern.exec(url);
-    if (match?.[1]) return match[1];
-  }
-  try {
-    const parsed = new URL(url);
-    if (/vimeo\.com$/i.test(parsed.hostname)) {
-      const id = parsed.pathname.split("/").filter(Boolean).pop();
-      return id && /^\d+$/.test(id) ? id : null;
-    }
-  } catch {
-    return null;
-  }
-  return null;
+export function adminApprove(id: number): Promise<AdminStateResult> {
+  return http().post<AdminStateResult>(`/api/videos/admin/${id}/approve`);
 }
 
-export function canonicaliseVideoLink(raw: string): CanonicalisedLink {
-  const canonicalUrl = normalizeVideoUrl(raw);
-  if (!raw.trim()) {
-    return { input: raw, canonicalUrl: null, provider: null, providerVideoId: null, issue: null };
-  }
-  if (!canonicalUrl) {
-    return {
-      input: raw,
-      canonicalUrl: null,
-      provider: null,
-      providerVideoId: null,
-      issue: "That does not look like a web address.",
-    };
-  }
-  let hostname = "";
-  try {
-    hostname = new URL(canonicalUrl).hostname;
-  } catch {
-    hostname = "";
-  }
-  const providerId = extractProviderVideoId(canonicalUrl);
-  let provider: VideoProvider | null = "external";
-  if (/youtube\.com|youtu\.be/i.test(hostname)) provider = "youtube";
-  else if (/vimeo\.com/i.test(hostname)) provider = providerId ? "vimeo" : "external";
-  else if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(canonicalUrl)) provider = "external";
-
-  let issue: string | null = null;
-  if (provider === "youtube" && !providerId) {
-    issue = "YouTube links need a video id (watch?v=…, /shorts/…, or youtu.be/…).";
-  } else if (provider === "vimeo" && !providerId) {
-    issue = "Vimeo links need the numeric video id in the path.";
-  } else if (provider === "external" && !/\.(mp4|webm|mov|m4v)(\?|$)/i.test(canonicalUrl)) {
-    issue = "Direct links must point at a video file (.mp4, .webm, .mov, .m4v) or a supported provider.";
-  }
-  return { input: raw, canonicalUrl, provider, providerVideoId: providerId, issue };
+export function adminRemove(id: number): Promise<AdminStateResult> {
+  return http().post<AdminStateResult>(`/api/videos/admin/${id}/remove`);
 }
 
-/** True when the browser can stream this item directly (otherwise: provider/unavailable UI). */
+export function adminReprocess(id: number): Promise<AdminStateResult> {
+  return http().post<AdminStateResult>(`/api/videos/admin/${id}/reprocess`);
+}
+
+export function adminRankConfig(): Promise<RankConfig> {
+  return http().get<RankConfig>("/api/videos/admin/rank-config");
+}
+
+/** All six keys are required and must sum to 1.0 (±0.001) or the call is a 400. */
+export function adminPutRankConfig(weights: Record<VideoRankingKey, number>): Promise<RankConfig> {
+  return http().put<RankConfig>("/api/videos/admin/rank-config", { weights });
+}
+
+export function adminSources(): Promise<{ items: VideoSource[] }> {
+  return http().get<{ items: VideoSource[] }>("/api/videos/admin/sources");
+}
+
+export function adminAddSource(input: {
+  kind: "rss" | "sitemap" | "allowlist";
+  url: string;
+  provider: VideoProvider;
+  enabled: boolean;
+}): Promise<VideoSource> {
+  return http().post<VideoSource>("/api/videos/admin/sources", input);
+}
+
+/** The whole discovery pipeline's only trigger (there is no cron). ≤50 urls per call. */
+export function adminRunDiscovery(input: { urls: string[]; sourceId?: number; etag?: string }): Promise<DiscoveryRunResult> {
+  return http().post<DiscoveryRunResult>("/api/videos/admin/discovery/run", input);
+}
+
+/* ------------------------------------------------------------------ *
+ * Small shared helpers (no network)
+ * ------------------------------------------------------------------ */
+
+/** True when the browser can stream this item directly; otherwise the external panel shows. */
 export function isPlayableDirectly(item: VideoItem): boolean {
-  return !!item.playUrl && (item.provider === "upload" || item.provider === "external");
+  return item.provider === "self" && !!item.playUrl;
 }
 
 export function videoSharePath(item: VideoItem): string {
-  return `/videos/${encodeURIComponent(item.id)}`;
+  return `/videos?video=${item.id}`;
+}
+
+/** Display name across the two author DTO flavours (video author vs comment Person). */
+export function authorDisplayName(author: VideoAuthor | null | undefined): string {
+  if (!author) return "";
+  if (author.name) return author.name;
+  const joined = [author.firstName, author.lastName].filter(Boolean).join(" ");
+  return joined || author.username || "";
 }

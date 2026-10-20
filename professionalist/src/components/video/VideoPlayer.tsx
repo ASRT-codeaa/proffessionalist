@@ -59,35 +59,60 @@ export function VideoPlayer({
   className,
 }: VideoPlayerProps) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const embedRef = useRef<HTMLIFrameElement | null>(null);
   const [telemetry, setTelemetry] = useState<PlayerTelemetry>({ currentTimeMs: 0, durationMs: 0, bufferedMs: 0 });
   const [needsGesture, setNeedsGesture] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const [embedLaunched, setEmbedLaunched] = useState(false);
+  const [embedPlaying, setEmbedPlaying] = useState(false);
   const [status, setStatus] = useState<VideoPlayerStatus>(() => initialStatus(item));
+  /** Autoplay intent: false after a user pause so nothing resumes playback behind their finger. */
+  const wantPlayRef = useRef(true);
+  const statusRef = useRef<VideoPlayerStatus>(status);
 
   const playUrl = item.playUrl ? videoHttp().mediaUrl(item.playUrl) : "";
   const poster = item.thumbnailUrl ? videoHttp().mediaUrl(item.thumbnailUrl) : undefined;
   const directPlayback = isPlayableDirectly(item);
-  const totalMs = telemetry.durationMs || item.durationMs;
+  const totalMs = telemetry.durationMs || item.durationMs || 0;
+  /* a link row with a server-built embed plays in-page once the viewer taps — the tap itself is
+     the user gesture autoplay policies demand; without the tap the provider loads nothing */
+  const embed = item.kind === "link" ? item.embedUrl : null;
+  const showEmbed = Boolean(embed) && embedLaunched && active;
 
   useEffect(() => {
-    setStatus(initialStatus(item));
+    statusRef.current = status;
+  }, [status]);
+
+  useEffect(() => {
+    const next = initialStatus(item);
+    statusRef.current = next;
+    setStatus(next);
     setTelemetry({ currentTimeMs: 0, durationMs: item.durationMs || 0, bufferedMs: 0 });
     setNeedsGesture(false);
+    setEmbedLaunched(false);
+    setEmbedPlaying(false);
+    wantPlayRef.current = true;
   }, [item.id, item.playUrl, item.provider, item.durationMs]);
 
   /** Plays when the slot becomes active, pauses when it leaves — never two at once. */
   useEffect(() => {
     const el = ref.current;
-    if (!el || !directPlayback || status === "error" || status === "unconfigured") return;
+    if (!el || !directPlayback) return;
+    const current = statusRef.current;
+    if (current === "error" || current === "unconfigured") return;
     if (!active) {
       if (!el.paused) {
         el.pause();
         onPlayingChange?.(false);
         onActivity?.("pause");
       }
-      setStatus((prev) => (prev === "playing" ? "paused" : prev));
+      if (current === "playing") setStatus("paused");
+      wantPlayRef.current = true;
       return;
     }
+    // `status` deliberately is not a dep: it used to be, and every user pause flipped it
+    // and re-ran this effect straight back into el.play(). Pause never stuck.
+    if (!wantPlayRef.current) return;
     const attempt = el.play();
     if (attempt && typeof attempt.then === "function") {
       attempt
@@ -102,7 +127,7 @@ export function VideoPlayer({
           onPlayingChange?.(false);
         });
     }
-  }, [active, directPlayback, muted, reloadToken, status, onActivity, onPlayingChange]);
+  }, [active, directPlayback, muted, reloadToken, playUrl, onActivity, onPlayingChange]);
 
   const syncTelemetry = useCallback(() => {
     const el = ref.current;
@@ -128,6 +153,7 @@ export function VideoPlayer({
     const el = ref.current;
     if (!el || !directPlayback) return;
     if (el.paused) {
+      wantPlayRef.current = true;
       const attempt = el.play();
       attempt
         ?.then(() => {
@@ -137,6 +163,7 @@ export function VideoPlayer({
         })
         .catch(() => setNeedsGesture(true));
     } else {
+      wantPlayRef.current = false;
       el.pause();
       onPlayingChange?.(false);
       onActivity?.("pause");
@@ -172,26 +199,101 @@ export function VideoPlayer({
     };
   }, [active, directPlayback, item.id, togglePlay, seekTo, telemetry.currentTimeMs, totalMs]);
 
+  /**
+   * Leaving the slot unmounts the provider iframe outright: its audio stops, and coming back
+   * replays from a fresh user tap instead of an autoplay=1 remount the browser will refuse.
+   */
+  useEffect(() => {
+    if (!active) {
+      setEmbedLaunched(false);
+      setEmbedPlaying(false);
+    }
+  }, [active]);
+
+  /**
+   * Page keyboard/transport buttons for a launched embed go through the provider command
+   * APIs over postMessage (play/pause only); seek and duration stay the provider player's own job.
+   */
+  useEffect(() => {
+    if (!showEmbed || !embed) return;
+    const vimeo = item.provider === "vimeo";
+    const targetOrigin = frameOrigin(embed);
+    const transport: VideoTransport = {
+      toggle: () => {
+        const next = !embedPlaying;
+        const frame = embedRef.current;
+        if (frame?.contentWindow) {
+          const payload = vimeo
+            ? JSON.stringify({ method: next ? "play" : "pause" })
+            : JSON.stringify({ event: "command", func: next ? "playVideo" : "pauseVideo", args: [] });
+          frame.contentWindow.postMessage(payload, targetOrigin);
+        }
+        setEmbedPlaying(next);
+      },
+      seek: () => {},
+      isPaused: () => !embedPlaying,
+      durationMs: () => 0,
+      currentTimeMs: () => 0,
+    };
+    transportSinks.set(item.id, transport);
+    return () => {
+      if (transportSinks.get(item.id) === transport) transportSinks.delete(item.id);
+    };
+  }, [showEmbed, embed, embedPlaying, item.id, item.provider]);
+
   const unmute = () => {
     const el = ref.current;
     onMutedChange(false);
     if (!el) return;
     el.muted = false;
     setNeedsGesture(false);
+    wantPlayRef.current = true;
     const attempt = el.play();
     attempt?.catch(() => setNeedsGesture(true));
   };
 
   if (!directPlayback) {
+    const sourceUrl = (/^https?:/i.test(item.playUrl) ? item.playUrl : "") || playUrl;
+    if (showEmbed && embed) {
+      return (
+        <div className={clsx("relative h-full w-full overflow-hidden bg-black", className)} data-video-player={item.id}>
+          <iframe
+            ref={embedRef}
+            src={embedSrc(embed, item.provider)}
+            className="absolute inset-0 h-full w-full border-0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerPolicy="strict-origin-when-cross-origin"
+            allowFullScreen
+            title={item.caption || `Video by ${item.author.name}`}
+          />
+        </div>
+      );
+    }
     return (
       <div className={clsx("relative grid h-full w-full place-items-center overflow-hidden bg-black", className)}>
         {poster ? <img src={poster} alt="" className="absolute inset-0 h-full w-full object-cover opacity-35" /> : null}
         <div className="relative flex max-w-sm flex-col items-center gap-3 px-6 text-center">
-          <p className="text-sm font-semibold text-white/90">
-            This video streams from {providerName(item.provider)} and plays in their player.
-          </p>
+          {embed ? (
+            <button
+              type="button"
+              onClick={() => {
+                setEmbedLaunched(true);
+                setEmbedPlaying(true);
+              }}
+              className="grid h-16 w-16 place-items-center rounded-full bg-white/95 text-ink shadow-lg transition-transform hover:scale-105"
+              aria-label={`Play on ${providerName(item.provider)}`}
+            >
+              <Play className="h-7 w-7" aria-hidden />
+            </button>
+          ) : (
+            <p className="text-sm font-semibold text-white/90">
+              {item.kind === "indexed"
+                ? "This clip was indexed from an outside source and plays in their player."
+                : "This video is hosted on an external link and plays there."}
+            </p>
+          )}
           <a
-            href={playUrl || item.playUrl || "#"}
+            href={sourceUrl || "#"}
             target="_blank"
             rel="noreferrer noopener"
             className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-white/95 px-4 text-sm font-semibold text-ink transition-colors hover:bg-white"
@@ -249,7 +351,10 @@ export function VideoPlayer({
         </div>
       ) : null}
 
-      <div className="absolute inset-x-0 bottom-0 flex flex-col gap-1 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-3 pb-2 pt-8">
+      <div
+        data-transport-zone
+        className="absolute inset-x-0 bottom-0 z-30 flex flex-col gap-1 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-3 pb-2 pt-8"
+      >
         <VideoProgressBar
           currentTimeMs={telemetry.currentTimeMs}
           durationMs={totalMs}
@@ -306,7 +411,9 @@ export function VideoPlayer({
               type="button"
               onClick={() => {
                 setTelemetry({ currentTimeMs: 0, durationMs: item.durationMs || 0, bufferedMs: 0 });
+                statusRef.current = "loading";
                 setStatus("loading");
+                wantPlayRef.current = true;
                 setReloadToken((token) => token + 1);
               }}
               className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-white/95 px-4 text-sm font-semibold text-ink transition-colors hover:bg-white"
@@ -326,14 +433,49 @@ function initialStatus(item: VideoItem): VideoPlayerStatus {
   return item.playUrl ? "idle" : "unconfigured";
 }
 
+/** The tap has happened by the time we build this src, so autoplay is earned, not requested cold. */
+function embedSrc(embed: string, provider: string): string {
+  try {
+    const url = new URL(embed);
+    url.searchParams.set("autoplay", "1");
+    if (provider === "youtube") {
+      // The command API (play/pause via postMessage) only answers with the JS API enabled.
+      url.searchParams.set("enablejsapi", "1");
+      url.searchParams.set("playsinline", "1");
+    }
+    if (provider === "vimeo") {
+      url.searchParams.set("api", "1");
+      url.searchParams.set("dnt", "1");
+      url.searchParams.set("playsinline", "1");
+      url.searchParams.set("title", "0");
+      url.searchParams.set("byline", "0");
+      url.searchParams.set("portrait", "0");
+    }
+    return url.toString();
+  } catch {
+    return embed;
+  }
+}
+
+/** postMessage targetOrigin for the command calls: the frame's own origin, never a wildcard. */
+function frameOrigin(embed: string): string {
+  try {
+    return new URL(embed).origin;
+  } catch {
+    return "*";
+  }
+}
+
 function providerName(provider: string): string {
   switch (provider) {
     case "youtube":
       return "YouTube";
     case "vimeo":
       return "Vimeo";
-    case "external":
-      return "the source site";
+    case "linkedin":
+      return "LinkedIn";
+    case "self":
+      return "Professionalist";
     default:
       return provider || "the source site";
   }
@@ -348,8 +490,8 @@ function bufferedEnd(el: HTMLVideoElement): number {
 }
 
 /* Transport registry: the feed looks up the active player by video id. */
-const transportSinks = new Map<string, VideoTransport>();
+const transportSinks = new Map<number, VideoTransport>();
 
-export function getVideoTransport(videoId: string): VideoTransport | null {
+export function getVideoTransport(videoId: number): VideoTransport | null {
   return transportSinks.get(videoId) ?? null;
 }

@@ -79,6 +79,13 @@ Nullability — every other field is always present and non-null:
 
 `kind` ∈ `upload | link | indexed`; `provider` ∈ `self | youtube | vimeo | linkedin`.
 
+`link` rows always carry `canonicalUrl` and `embedUrl` **for every viewer**, not only in admin
+payloads: both strings are the public watch/embed URLs the provider publishes, so there is no
+secret to leak, and the player needs `embedUrl` to launch the click-to-play iframe facade.
+Upload rows keep the old rule — those URLs are only exposed to their owner or to staff.
+A `linkedin` link has `embedUrl: null` (no embed gate for that provider), and the player then
+offers the external "Watch on LinkedIn" link instead of an iframe.
+
 ---
 
 ## Feed
@@ -93,6 +100,9 @@ Nullability — every other field is always present and non-null:
 * `limit` is clamped to 1..30.
 * Only rows with `moderation_state = 'approved'`, `availability = 'ok'`, `videos.deleted_at IS NULL`,
   `posts.deleted_at IS NULL` and an `active` author appear in any tab.
+* The same `PUBLIC_CLAUSE` also hides creators the viewer **muted**, and every creator in a **block**
+  relationship with the viewer (a block is mutual — neither side sees the other's clips). See
+  *Safety: mutes and blocks*.
 * `for-you` = weighted ranking (see *Ranking*). `following` = authored by a user the viewer follows
   (newest first). `trending` = recent engagement: `(likes+comments+saves+shares)` over items created
   in the last 7 days, ties broken by newest, then by id.
@@ -106,6 +116,7 @@ Nullability — every other field is always present and non-null:
 `GET /api/videos/search?q=<1..80 chars>&cursor=<opaque>&limit=10`
 
 Matches caption text, hashtags, topic slugs and author name/username, ASCII-case-insensitive.
+Search answers **every** match — the feed's per-author ceiling does not apply to a lookup.
 
 * No match: `200 {"items":[],"nextCursor":null,"query":"womyn","total":0}`.
 * Empty/absent `q`: `200 {"items":[],"nextCursor":null,"query":"","total":0}` — the client shows its
@@ -221,8 +232,11 @@ row through `services/audit.js` with `action: "videos.<call>"`, `details.target`
 
 ### `GET /admin/index?state=pending|approved|removed|all&cursor=&limit=`
 `200 {"items":[ VIDEO_ITEM + {"moderationState":"pending","availability":"ok","canonicalUrl":"…",
-"sourceUserId":12,"indexedAt":"…","lastCheckedAt":null} ],"total":3,"nextCursor":null,"state":"pending"}`
-Staff sees everything including soft-deleted rows when `state=all`.
+"sourceUserId":12,"indexedAt":"…","lastCheckedAt":null} ],"total":3,"nextCursor":null,"state":"pending",
+"counts":[{"state":"pending","n":3},{"state":"approved","n":19}]}`
+Staff sees everything including soft-deleted rows when `state=all`. The queue lists **every**
+matching row (no per-author ceiling — see *Ranking*), newest-indexed first; `counts` is the whole
+index grouped by state, so the console can show queue depth without paging through it.
 
 ### `POST /admin/:id/approve` · `POST /admin/:id/remove` · `POST /admin/:id/reprocess`
 No body. Single-statement updates (`… RETURNING id`), so the write and its guard are one round trip.
@@ -307,12 +321,21 @@ optional `etag` field. `urls` is capped at 50 entries per call (extra ones are d
 | `quality_freshness` | `14 ÷ (14 + ageInDays)`, computed in JS from `created_at` so no dialect-specific date arithmetic is needed. |
 | `diversity_discovery` | `(1 ÷ (1 + sameAuthorAlreadyOnThisPage)) × (1 − min(1, impressions ÷ 25))` — rewards unseen clips, discounts authors the page already carries. |
 
-Hard guard, independent of the weights: **at most 2 videos per author per page** (a page is one
-`limit` slice). With `diversity_discovery` at 0 the other weights still order the page, but a single
-prolific creator cannot occupy it — that is the anti-popularity-only invariant the tests pin.
+Diversity guard, independent of the weights: **one author is preferred at 2 items before any other
+creator's row is skipped** (the `MAX_PER_AUTHOR` ceiling shapes the page's order, together with
+`diversity_discovery`). Once every other candidate has been taken, the ceiling relaxes — the next
+best over-ceiling clip is returned rather than dropping content. An earlier reading hard-capped the
+whole ranking window at 2 per author, which made a prolific creator's third-plus clips *unreachable*
+(19 approved videos by two authors answered the feed with 4 items); the 2026-10-20 fix keeps the
+ordering intent and restores reachability. The admin queue and search are exempt from the ceiling
+entirely — a moderation list or a lookup that hides rows reads as breakage, not as diversity.
 
 `ranking.reasons` reports each feature's raw value and the weight applied, so the UI can label
 "why am I seeing this" and the ops console can debug a weight change without a redeploy.
+
+**Parameter binding convention** (where the bug above lived): `rankedPage`/`selectVideos` bind
+`[viewer, ...whereParams]`, so inside any caller-supplied `WHERE` clause **`$1` is always the viewer
+id** — route parameters must be numbered from `$2` (`routeParams()` in `routes/spa/videos.js`).
 
 ## Schema
 
@@ -323,3 +346,57 @@ hiring, design, engineering, finance, sales, leadership, freelancing), `video_in
 `video_activity`, `video_rank_config` (seeded with the six weights), `video_sources`,
 `video_discovery_log`. A video is always a `posts` row plus a `videos` row, so `post_likes`,
 `comments`, `post_shares`, `saved_items` keep serving engagement verbatim.
+
+## Automatic enrolment from posts
+
+The feed already received videos before `/videos` existed: plain public posts whose `media` carries
+an `.mp4`/`.webm`/`.mov`/`.m4v` under `/uploads/`, and posts whose `link_url` passes `gateUrl()`.
+Both are now enrolled into the `videos` index automatically, through one shared classifier —
+`videoKit.fromPostRow(post)` — used by:
+
+* the **intake hook** in `POST /posts` (`routes/spa/feed.js`): after the post row is committed, a
+  post with `post_type='post'`, public visibility and no `scheduled_at` is classified; a match is
+  inserted as `videos (…, moderation_state='pending', availability='ok')` unless its
+  `canonical_url` is already indexed or the post already owns a row. Listing kinds (job, product,
+  …), connections-only posts and scheduled posts stay out; the hook is wrapped in `try/catch`
+  because enrolment must never turn a successful post into a failed request.
+* the **backfill tool** `cf-api/tools/backfill-post-videos.mjs` (same classifier, run against D1
+  over the HTTP query API). Dry run by default; `--apply` only INSERTs. Idempotent: re-running
+  enrols 0.
+
+Everything lands as `pending`: **nothing reaches the videos feed until staff approve it in the
+video console** (`/videos/admin`), backfilled rows included — the operator chose review-first over
+auto-approval. Approved rows then obey the same `PUBLIC_CLAUSE` as creator-added videos, and
+engagement never moves: it stays on the `posts` row, which is what `VIDEO_SELECT` reads through `p`.
+
+Notes for the two dialects: the hook lives in the `app-new` overlay and so only the Cloudflare
+side auto-enrols; the VPS stays byte-identical to the mirror as the rollback path (rollback
+simply stops enrolment, it does not un-index anything). The provider-link half is currently
+vacuous in production: the two existing `link_url` posts point at non-allowlisted domains, so the
+gate rejects them by design — links enrol only from the moment a gated URL is posted.
+
+## Safety: mutes and blocks
+
+Mutes are **server-side and account-wide** (`mutes(user_id, muted_id)` — migration 013, PK on the
+pair, FK cascades to `users`, `CHECK user_id <> muted_id`). The list travels with the account, so
+mute state survives a device change; the client's localStorage copy is only a pre-load cache.
+
+Routes (router `app-new/routes/spa/safety.js`, mounted into the single `/api` chain — adding a
+second `app.use("/api", authenticate, userLimiter, …)` line would double-count every request
+against the rate limiter):
+
+| Route | Answers | Notes |
+| --- | --- | --- |
+| `GET /api/mutes` | `{"items":[{id,username,name,avatarUrl}]}` | the viewer's muted creators |
+| `POST /api/mutes/:userId` | `201 {"muted":true,"userId":n}` | self → `400`, unknown user → `404`, repeat → idempotent `201` |
+| `DELETE /api/mutes/:userId` | `{"muted":false,"userId":n}` | unmute; the creator is immediately back in both feeds |
+| `GET /api/blocks` | `{"items":[…]}` | read-only addition — the `POST/DELETE /api/blocks` write path already lives in `platform.js` and is deliberately not duplicated here |
+
+The exclusion itself is SQL, applied to both feeds identically: the videos `PUBLIC_CLAUSE`
+(`videoKit.js`) and the `WHERE` list of `GET /api/posts/feed` (`routes/spa/feed.js`) each carry a
+`NOT EXISTS mutes` (one-way: muting hides the creator's posts from the muter only) and a symmetric
+`NOT EXISTS blocks` (two-way: blocker and blocked never see each other's content, in either
+direction of the relationship). `GET /api/videos/search` routes through the same ranking page, so
+it inherits the videos-side exclusion. Home feed additionally accepts `?scope=following`, which
+narrows the timeline to creators the viewer follows (the same `follows` table the videos
+"following" tab reads) — the client exposes it as a "Following" chip on the feed page.

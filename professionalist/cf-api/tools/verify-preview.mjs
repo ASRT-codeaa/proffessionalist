@@ -70,6 +70,9 @@ const CASES = [
   ["health", "/health", {}],
   ["health/full", "/health/full", {}],
   ["404 envelope", "/no-such-endpoint", {}],
+  /* /api/meta/content is the query that proved db.js:67 bound its text[] parameter raw (an empty
+     result, not an error — see the handoff §5.8 route-diff finding), so it is a permanent case */
+  ["meta content", "/api/meta/content", {}],
   ["401 envelope", "/api/meta", {}],
   ["401 with origin", "/api/meta", { origin: "https://proffessionalist.com" }],
   ["preflight", "/api/auth/login", { "access-control-request-method": "POST", origin: "https://proffessionalist.com" }, "OPTIONS"],

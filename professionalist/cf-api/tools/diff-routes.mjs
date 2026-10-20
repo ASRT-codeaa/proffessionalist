@@ -15,16 +15,28 @@
      - Nothing secret is ever printed: external values pass through hideSecrets(); no token, hash, JWT,
        Authorization header, password, or the D1 uuid.
 
-   node cf-api/tools/diff-routes.mjs [--only=<regex>] [--list] */
+   node cf-api/tools/diff-routes.mjs [--only=<regex>] [--list] [--prod-direct] [--worker-live]
+
+   Post-flip (§5.13): with NO new flags the harness still compares the hostname (now the Worker)
+   against the local sandbox.  After the api.proffessionalist.com flip, a meaningful run needs
+   --prod-direct (oracle = the still-running VPS at 140.245.50.236) and --worker-live (subject =
+   the deployed Worker behind the real hostname).  See diff-support.mjs applyTargetArgs(). */
 import crypto from "node:crypto";
 import {
   prodRequest, workerRequest, hideSecrets, enumerateEndpoints, classifyGroup, probePath,
-  compareHeaders, headerCounts, headerValue, budget, d1Read, d1WriteBatch,
+  compareHeaders, headerCounts, headerValue, budget, d1Read, d1WriteBatch, applyTargetArgs,
 } from "./diff-support.mjs";
 
 const ARGS = process.argv.slice(2);
 const ONLY = (() => { const m = ARGS.find(a => a.startsWith("--only=")); return m ? new RegExp(m.slice(7)) : null; })();
 const LIST = ARGS.includes("--list");
+/* --phase-a-only: stop after the read-only phases.  Used post-flip when the Cloudflare API token is
+   unavailable (Phase B asserts/cleans its throwaway rows through the D1 HTTP API, and its register
+   step writes a live row we could not delete without that access — so it must not run at all). */
+const PHASE_A_ONLY = ARGS.includes("--phase-a-only");
+const TARGETS = applyTargetArgs(ARGS);
+if (TARGETS.edge || PROD_DIRECT()) console.log(`targets: prod=${PROD_DIRECT() ? "vps-direct 140.245.50.236:80" : "hostname"} worker=${TARGETS.edge ? "live (deployed, via edge)" : "local sandbox 127.0.0.1:8803"}`);
+function PROD_DIRECT() { return ARGS.includes("--prod-direct"); }
 
 let DEFECTS = 0;
 const defects = [];
@@ -40,6 +52,10 @@ const allEndpoints = [...routerEndpoints, ...appLevel];
 const definitions = routerEndpoints.length;
 const uniqMethodPath = [...new Set(routerEndpoints.map(e => `${e.method} ${e.full}`))];
 const uniqPaths = [...new Set(allEndpoints.map(e => e.full))];
+/* app-new-only paths (group "worker-only"): production has no such route, so Phase A must not probe
+   prod for them.  They are still exercised — see the authenticated GET sweep, which runs on group
+   guard rather than group and therefore covers them against the Worker and real D1. */
+const WORKER_ONLY = new Set(allEndpoints.filter(e => e.group === "worker-only").map(e => e.full));
 
 if (LIST) {
   const groups = {};
@@ -47,7 +63,7 @@ if (LIST) {
   console.log(`router definitions parsed from cf-api/port: ${definitions}`);
   console.log(`unique (method,path) endpoints: ${uniqMethodPath.length}  (shadowed dupes: ${definitions - uniqMethodPath.length})`);
   console.log(`unique paths (production GET probes + 3): ${uniqPaths.length}`);
-  for (const g of ["public", "anonymous-guarded", "authenticated", "admin-ops"]) {
+  for (const g of ["public", "anonymous-guarded", "authenticated", "admin-ops", "worker-only"]) {
     console.log(`\n## ${g} (${(groups[g] || []).length} endpoints)`);
     for (const e of (groups[g] || []).sort((a, b) => (a.full + a.method).localeCompare(b.full + b.method)))
       console.log(`  ${e.method.padEnd(6)} ${e.full}   [${e.file}]`);
@@ -73,12 +89,13 @@ const cleanCount = { status: 0, body: 0, headers: 0 };
 
 for (const p of uniqPaths) {
   if (ONLY && !ONLY.test(p)) continue;
+  if (WORKER_ONLY.has(p)) continue;
   const at = safe(p);
   const pr = await prodRequest("GET", at).catch(e => ({ error: String(e.message) }));
   const wr = await workerRequest("GET", at, { timeoutMs: 45000 }).catch(e => ({ error: String(e.message) }));
   if (pr.error || wr.error) { rows.push({ p, note: `probe error prod=${pr.status || pr.error} work=${wr.status || wr.error}` }); continue; }
 
-  const hdr = compareHeaders(pr.rawHeaders, wr.rawHeaders, pr.status);
+  const hdr = compareHeaders(pr.rawHeaders, wr.rawHeaders, pr.status, wr.status);
   let bodyClass;
   if (pr.status === wr.status) {
     if (pr.bodyText === wr.bodyText) bodyClass = "byte-identical";
@@ -158,6 +175,13 @@ console.log("\n=== PHASE A.2: preflight, RateLimit FORMAT, and a real /uploads o
 /* ------------------------------------------------------------------ *
  *  PHASE B — Worker-only authenticated surface with ONE throwaway account
  * ------------------------------------------------------------------ */
+if (PHASE_A_ONLY) {
+  console.log("\n=== PHASE B / CLEANUP: SKIPPED (--phase-a-only) ===");
+  console.log("  Phase B writes a throwaway user/post/avatar/message set through the live Worker and asserts");
+  console.log("  then deletes those rows via the D1 HTTP API. With the Cloudflare API token unavailable the");
+  console.log("  rows could not be cleaned up, so the phase is refused rather than run dirty. Re-run without");
+  console.log("  --phase-a-only once a working token is back in place.");
+} else {
 console.log("\n=== PHASE B: Worker-only authenticated surface ===");
 const RUN = "diff-" + crypto.randomBytes(3).toString("hex");
 const EMAIL = `zz-${RUN}@example.com`;
@@ -300,12 +324,31 @@ if (bearer && uid) {
     if (served.status !== 200) defect("B-avatar-r2", `uploaded object not served back (GET ${avJson.url} -> ${served.status})`);
   } else defect("B-avatar", `avatar upload status=${av.status} body=${hideSecrets(av.bodyText).slice(0, 200)}`);
 
-  // message send (conversation then message)
-  const conv = await j("POST", "/api/messages/conversations", { participant: 35, message: `diff msg ${RUN}` }, auth());
-  const cid = conv.json && (conv.json.conversation?.id ?? conv.json.id ?? conv.json.conversationId);
-  console.log(`  POST /api/messages/conversations -> ${conv.status} convId=${cid}`);
-  if (cid) created.convId = String(cid);
-  else if (conv.status < 200 || conv.status >= 300) console.log(`      (conversation create ${conv.status}: ${hideSecrets(conv.text).slice(0, 120)})`);
+  /* message send (conversation then message).  chat.js:92 reads body.userId and body.firstMessage;
+     this step used to post {participant, message}, which the route rejects with
+     fields.userId="Not valid" — the port behaving CORRECTLY, the harness sending the wrong keys
+     (confirmed 2026-10-20 by replaying both shapes against the Worker: {participant,…} -> 400,
+     {userId, firstMessage} -> 201).  The peer is a real active user read from D1 rather than a
+     hard-coded id, and the conversation is deleted again in CLEANUP below (created.convId). */
+  const peer = (await d1Read(`SELECT id FROM users WHERE status = 'active' AND id <> ${uid} ORDER BY id LIMIT 1`)
+    .catch(() => []))[0];
+  if (peer) {
+    const conv = await j("POST", "/api/messages/conversations", { userId: peer.id, firstMessage: `diff msg ${RUN}` }, auth());
+    const cid = conv.json && (conv.json.conversation?.id ?? conv.json.id ?? conv.json.conversationId);
+    console.log(`  POST /api/messages/conversations (peer ${peer.id}) -> ${conv.status} convId=${cid}`);
+    if (cid) created.convId = String(cid);
+    else defect("B-conversation", `conversation create ${conv.status}: ${hideSecrets(conv.text).slice(0, 160)}`);
+    const sent = cid ? await j("POST", `/api/messages/conversations/${created.convId}/messages`, { text: `diff msg 2 ${RUN}` }, auth()) : { status: 0, text: "" };
+    console.log(`  POST /api/messages/conversations/{id}/messages -> ${sent.status}`);
+    if (sent.status !== 200 && sent.status !== 201) defect("B-message-send", `send ${sent.status}: ${hideSecrets(sent.text).slice(0, 160)}`);
+    else {
+      /* the row must be readable back through the same route the app uses (chat.js:133 writes body
+         from payload.text, so an empty text here would mean the write or the read is broken) */
+      const room = await j("GET", `/api/messages/conversations/${created.convId}`, null, auth());
+      const txt = JSON.stringify(room.json || {});
+      if (!txt.includes(`diff msg 2 ${RUN}`)) defect("B-message-read", `sent message not in GET /conversations/:id (${room.status})`);
+    }
+  } else console.log("  POST /api/messages/conversations: SKIPPED (no active peer row in D1)");
 
   // admin / ops reads as a plain 'user' -> expect the guard's 403 (data is admin-only, out of scope)
   for (const p of ["/api/admin/users", "/api/admin/ops/status"]) {
@@ -313,6 +356,47 @@ if (bearer && uid) {
     console.log(`  GET ${p} (role=user) -> ${r.status} code=${r.json?.error?.code}`);
     if (r.status !== 403) defect(`B-guard:${p}`, `expected 403 forbidden for non-staff, got ${r.status}`);
     else if (!isEnvelope(r.json) || r.json.error.code !== "forbidden") defect(`B-guard-env:${p}`, `403 not a forbidden envelope: ${hideSecrets(r.text).slice(0, 160)}`);
+  }
+}
+
+// B.4b admin-ops GET sweep — WORKER-ONLY, adds ZERO production requests. The 403 checks above prove
+// a role=user token is DENIED this surface; they prove nothing about the SQL an admin actually runs
+// (§5.9: generate_series in routes/admin.js has no SQLite equivalent — a latent 500 class). So:
+// promote the throwaway user by a direct D1 write through the same d1WriteBatch the verify-email
+// test already uses, re-mint a token the same way the register step did (POST /api/auth/login on the
+// Worker — same createSession/jwt.sign path; if login yields no token the register bearer still
+// works because middleware/authenticate.js re-reads users.role on every request), sweep every GET
+// endpoint in group admin-ops, then demote. CLEANUP deletes the session/audit rows this creates.
+const adminGets = [...new Set(routerEndpoints
+  .filter(e => e.group === "admin-ops" && e.method === "GET")
+  .map(e => e.full))];
+if (bearer && uid) {
+  const targets = ONLY ? adminGets.filter(p => ONLY.test(p)) : adminGets;
+  if (targets.length) {
+    await d1WriteBatch([{ sql: "UPDATE users SET role = 'admin' WHERE id = ?", params: [uid] }]);
+    const promoted = await d1Read(`SELECT role FROM users WHERE id = ${uid}`).then(r => r[0] && r[0].role).catch(() => null);
+    console.log(`  promoted throwaway user (direct D1 write) -> role=${promoted}`);
+    if (promoted !== "admin") defect("B-admin-promote", `role after UPDATE is ${promoted}, expected admin; sweep would 403`);
+    let adminBearer = bearer;
+    const lg = await j("POST", "/api/auth/login", { email: EMAIL, password: PASSWORD });
+    if (lg.status === 200 && lg.json && lg.json.token) { adminBearer = lg.json.token; console.log(`  login re-minted a token for the promoted user -> ${lg.status}`); }
+    else console.log(`  login -> ${lg.status}; reusing register bearer (role is read from the DB per request)`);
+    let a2xx = 0, a4xx = 0, a5xx = 0;
+    for (const p of targets) {
+      const at = p.replace(/:([A-Za-z_]+)/g, seg => /username|slug/i.test(seg) ? RUN : "1");
+      const r = await j("GET", at, null, { authorization: `Bearer ${adminBearer}` });
+      const mark = r.status >= 500 ? "<-- 5xx DEFECT" : r.status >= 400 ? "4xx" : "ok";
+      console.log(`  GET ${at} (role=admin) -> ${String(r.status).padEnd(3)} ${mark}`);
+      if (r.status >= 500) {
+        a5xx++;
+        const body = hideSecrets(r.text).slice(0, 400);
+        console.log(`      body: ${body}`);
+        defect(`B-admin500:${p}`, `worker 5xx ${r.status} envelope=${isEnvelope(r.json)} body=${body}`);
+      } else if (r.status >= 400) a4xx++; else a2xx++;
+    }
+    console.log(`  admin-ops GET sweep: ${targets.length} paths -> 2xx=${a2xx} 4xx=${a4xx} 5xx=${a5xx}; production requests used by this sweep: 0`);
+    await d1WriteBatch([{ sql: "UPDATE users SET role = 'user' WHERE id = ?", params: [uid] }])
+      .catch(e => console.log(`  demote skipped: ${hideSecrets(String(e.message)).slice(0, 80)}`));
   }
 }
 
@@ -388,8 +472,12 @@ if (created.uid) {
   for (const s of stmts) await d1WriteBatch([s]).catch(e => console.log(`  cleanup skip ${hideSecrets(e.message).slice(0, 80)}`));
   const gone = await d1Read(`SELECT COUNT(*) n FROM users WHERE id = ${u}`).then(r => r[0].n).catch(() => "?");
   console.log(`  deleted throwaway user ${u} (${EMAIL}); remaining users with that id = ${gone}`);
+  const goneByEmail = await d1Read(`SELECT COUNT(*) n FROM users WHERE email = LOWER('${EMAIL}')`).then(r => r[0].n).catch(() => "?");
+  console.log(`  CLEANUP PROOF: rows in users with email ${EMAIL} = ${goneByEmail} (must be 0; includes the admin-promoted throwaway)`);
   console.log(`  LEFT BEHIND (named, not removable without wrangler): R2 object ${created.avatarUrl || "(none)"}`);
 } else console.log("  (no throwaway user created — nothing to clean)");
+
+} /* end of the (!PHASE_A_ONLY) guard around Phase B .. CLEANUP */
 
 /* ------------------------------------------------------------------ *
  *  SUMMARY
@@ -397,7 +485,7 @@ if (created.uid) {
 console.log("\n=== SUMMARY ===");
 console.log(`endpoints: ${definitions} router definitions, ${uniqMethodPath.length} unique (method,path), ${uniqPaths.length} unique paths`);
 const gcount = {}; for (const e of allEndpoints) gcount[e.group] = (gcount[e.group] || 0) + 1;
-console.log(`grouping: public=${gcount.public} anonymous-guarded=${gcount["anonymous-guarded"]} authenticated=${gcount.authenticated} admin-ops=${gcount["admin-ops"]}`);
+console.log(`grouping: public=${gcount.public} anonymous-guarded=${gcount["anonymous-guarded"]} authenticated=${gcount.authenticated} admin-ops=${gcount["admin-ops"]} worker-only=${gcount["worker-only"] || 0}`);
 console.log(`production requests used: ${budget.prod}/${budget.max}`);
 console.log(`DEFECTS: ${DEFECTS}   BLOCKERS: ${blockers.length}`);
 for (const d of defects) console.log(`  DEFECT ${d.id}: ${d.detail}`);

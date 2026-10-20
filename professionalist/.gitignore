@@ -5,3 +5,4 @@ dist-server
 .env.local
 *.tsbuildinfo
 .DS_Store
+dist-videos

@@ -39,7 +39,7 @@ export function VideoProgressBar({
         disabled={!seekable}
         aria-label="Video position"
         aria-valuetext={`${formatDuration(currentTimeMs)} of ${formatDuration(durationMs)}`}
-        className="relative h-11 w-full cursor-pointer appearance-none bg-transparent opacity-0 disabled:cursor-default"
+        className="relative h-11 w-full cursor-pointer appearance-none rounded-full bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 disabled:cursor-default [&::-webkit-slider-runnable-track]:h-11 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-0 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.4)] disabled:[&::-webkit-slider-thumb]:opacity-0 [&::-moz-range-track]:h-11 [&::-moz-range-track]:bg-transparent [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white disabled:[&::-moz-range-thumb]:opacity-0"
         onChange={(event) => onSeek(Number(event.currentTarget.value))}
       />
     </div>

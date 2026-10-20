@@ -201,10 +201,47 @@ console.log("\n== what the adapter had to guess at is reported, not hidden ==");
   const r = await db.query(`SELECT id FROM users WHERE username ILIKE $1 ORDER BY created_at DESC NULLS LAST LIMIT 5`, ["u%"]);
   check("ILIKE + NULLS LAST still answers", r.rows.length === 2, `rows=${r.rows.length} (both u-prefixed users)`);
   const before = db.notes.length;
-  await db.query(`SELECT n FROM generate_series(1, 3) AS n`).catch(() => {});
-  check("a construct the adapter refuses to translate lands in db.notes for the deploy log",
+  await db.query(`SELECT week FROM generate_series(NOW() - INTERVAL '7 weeks', NOW(), INTERVAL '1 week') d(week)`).catch(() => {});
+  check("a construct the adapter refuses to translate lands in db.notes for the deploy log (timestamp generate_series is a hand port, not a translation)",
     db.notes.length > before && db.notes.some(n => /generate_series|postgres-ism/i.test(n)),
     `notes ${before} -> ${db.notes.length}: ${db.notes.slice(-1)[0] || ""}`.slice(0, 120));
+}
+
+console.log("\n== integer generate_series: the translator emits the recursive CTE ==");
+{
+  const r = await db.query(`SELECT value FROM generate_series(1, 3)`, []);
+  check("ascending, bare form: every row addressable as value", r.rows.map(x => x.value).join(",") === "1,2,3",
+    JSON.stringify(r.rows));
+  const g = await db.query(`SELECT value FROM generate_series(11, 0, -1) AS g`, []);
+  check("descending AS g: 12 rows from 11 down to 0, column still value",
+    g.rows.length === 12 && g.rows[0].value === 11 && g.rows[11].value === 0, `${g.rows.length} rows: ${JSON.stringify(g.rows.map(x => x.value))}`.slice(0, 110));
+  const d = await db.query(`SELECT week FROM generate_series(0, 6, 2) AS d(week)`, []);
+  check("column-alias form d(week): the alias names the emitted column", d.rows.map(x => x.week).join(",") === "0,2,4,6",
+    JSON.stringify(d.rows));
+  const e = await db.query(`SELECT value FROM generate_series(5, 1, 2)`, []);
+  check("start beyond stop with a positive step yields zero rows, not one stray 5", e.rows.length === 0, JSON.stringify(e.rows));
+  /* the exact statement admin.js monthlySignups() runs */
+  const m = await db.query(
+    `SELECT to_char(month, 'YYYY-MM') AS ym
+       FROM (SELECT date_trunc('month', NOW()) - (interval '1 month' * g) AS month
+               FROM generate_series(11, 0, -1) AS g) m
+      ORDER BY month`, []);
+  const yms = m.rows.map(x => x.ym);
+  const now = (await db.query(`SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS ym FROM users WHERE username = 'u1'`)).rows[0].ym;
+  check("the admin monthlySignups statement answers 12 oldest-first YYYY-MM keys on the stand-in D1",
+    yms.length === 12 && yms.every(s => /^\d{4}-\d{2}$/.test(s)) && yms.join() === yms.slice().sort().join() && yms[11] === now,
+    JSON.stringify(yms));
+  check("and the keys are exactly the shape the sibling GROUP BY statement produces, so the Map join matches",
+    now === new Date().toISOString().slice(0, 7) && m.rows[0].ym === (() => { const x = new Date(Date.UTC(now.slice(0, 4), now.slice(5, 7) - 1 - 11, 1)); return x.toISOString().slice(0, 7); })(),
+    `oldest=${m.rows[0].ym} newest=${now}`);
+  const before = db.notes.length;
+  let perr = null;
+  let prow = null;
+  try { await db.query(`SELECT value FROM generate_series($1, 5) AS g`, ["1"]); prow = "answered"; } catch (err) { perr = err; }
+  check("a parameterised generate_series is left alone and reported, never guessed into a CTE " +
+        "(if it had been guessed, this would have ANSWERED rows instead of erroring)",
+    prow === null && perr && /generate_series/.test(String(perr.message)) && db.notes.some(n => /generate_series/i.test(n)),
+    `err=${perr && String(perr.message).slice(0, 60)}, notes has ${db.notes.filter(n => /generate_series/i.test(n)).length} generate_series entries (dedup cap, +${db.notes.length - before} new)`);
 }
 
 console.log("\n== the real onboarding.js upsert, inside a transaction ==");
@@ -237,6 +274,28 @@ console.log("\n== the real onboarding.js upsert, inside a transaction ==");
     !flagged && p && p.job_title === "Engineer" && p.onboarding_done === true &&
     Array.isArray(p.interests) && p.interests.join(",") === "a,b",
     p ? `interests=${JSON.stringify(p.interests)} (${Array.isArray(p.interests) ? "array" : typeof p.interests}) done=${JSON.stringify(p.onboarding_done)}` : "no read (see above)");
+}
+
+console.log("\n== non-transactional binds of the types D1 has no parameter for (route diff, 2026-10-20) ==");
+{
+  /* The only text[] case this harness had was the onboarding upsert, which is DEFERRED into a batch
+     and therefore encoded (db.js:118).  The single-statement path bound raw, so `routes/meta.js:29`'s
+     `key = ANY($1::text[])` answered 0 rows on the Worker while pg answered 3 — a silently empty
+     result, not an error, which is the worst kind to miss.  This is that query, on that path. */
+  await db.query(`INSERT INTO app_content (key, value, updated_at) VALUES ($1, $2, $3)`,
+    ["diff.banner", "hello", new Date("2026-10-20T00:00:00.000Z")]);
+  const r = await db.query(`SELECT key, value FROM app_content WHERE key = ANY($1::text[])`,
+    [["diff.banner", "absent.key"]]);
+  check("a text[] bind on the single-statement path returns the row, the way pg does",
+    r.rows.length === 1 && r.rows[0].key === "diff.banner" && r.rows[0].value === "hello",
+    `${r.rows.length} rows: ${JSON.stringify(r.rows).slice(0, 80)}`);
+  const d = await db.query(`SELECT key, updated_at FROM app_content WHERE key = $1 AND updated_at = $2`,
+    ["diff.banner", new Date("2026-10-20T00:00:00.000Z")]);
+  check("…and so does a Date bind, compared for equality against the stored ISO text",
+    d.rows.length === 1, `${d.rows.length} rows, stored ${JSON.stringify(d.rows[0] && d.rows[0].updated_at)}`);
+  const b = await db.query(`SELECT value FROM app_content WHERE key = ANY($1::text[])`, [["absent.key"]]);
+  check("an array with nothing matching is still an empty result, not a throw",
+    b.rows.length === 0 && b.rowCount === 0, `${b.rows.length}`);
 }
 
 console.log(`\nVERDICT: ${PASS} passed, ${FAILS.length} failed`);

@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /home
+Disallow: /messages
+Disallow: /notifications
+Disallow: /settings
+Disallow: /admin
+Disallow: /profile/edit
+Disallow: /create-listing

@@ -2,6 +2,7 @@ const express = require("../../_shim/express.js");
 const { query } = require("../../db");
 const dto = require("../../services/spaDto");
 const kit = require("../../services/spaKit");
+const videos = require("../../services/videoKit");
 const { uploadFiles, publicUrl, mediaType } = require("../../middleware/upload");
 
 const router = express.Router();
@@ -79,8 +80,19 @@ router.get("/posts/feed", handle(async (req, res) => {
   const b = builder();
   const mine = b.add(me);
   const where = [`p.deleted_at IS NULL`, `p.scheduled_at IS NULL`, `u.status = 'active'`, visibleClause(mine)];
+  /* scope=following narrows the timeline to the authors the viewer follows — the same
+     follows table the videos "following" tab reads, so one graph answers both surfaces. */
+  if (str(req.query.scope, 20) === "following") {
+    where.push(`EXISTS (SELECT 1 FROM follows fo WHERE fo.follower_id = ${mine} AND fo.following_id = p.user_id)`);
+  }
+  /* the viewer's safety list, honoured here and in the videos ranking (videoKit PUBLIC_CLAUSE):
+     muted creators vanish one-way; a block vanishes both ways. */
+  where.push(`NOT EXISTS (SELECT 1 FROM mutes mu WHERE mu.user_id = ${mine} AND mu.muted_id = p.user_id)`);
+  where.push(`NOT EXISTS (SELECT 1 FROM blocks bl
+    WHERE (bl.blocker_id = ${mine} AND bl.blocked_id = p.user_id)
+       OR (bl.blocker_id = p.user_id AND bl.blocked_id = ${mine}))`);
   if (kind) where.push(`p.post_type = ${b.add(kind)}`);
-  if (hashtag) where.push(`EXISTS (SELECT 1 FROM unnest(COALESCE(p.hashtags, '{}')) AS t(tag) WHERE LOWER(t.tag) = ${b.add(hashtag)})`);
+  if (hashtag) where.push(`EXISTS (SELECT 1 FROM json_each(COALESCE(p.hashtags, '[]')) AS jt WHERE LOWER(jt.value) = ${b.add(hashtag)})`);
   if (author) where.push(`LOWER(u.username) = ${b.add(author)}`);
   const clause = where.join(" AND ");
 
@@ -180,14 +192,15 @@ router.post("/posts", handle(async (req, res) => {
     return invalid(res, { text: "Write something or attach media first" });
   }
 
+  const postKind = KINDS.includes(body.kind) ? body.kind : "post";
+  const visibility = body.audience === "connections" ? "connections" : "public";
   const created = await query(
     `INSERT INTO posts (user_id, content, media, media_url, post_type, visibility, link_url, poll,
                         hashtags, location, comments_disabled, scheduled_at)
      VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12::timestamptz)
      RETURNING id`,
     [me, content || " ", JSON.stringify(mediaUrls), mediaUrls[0] || null,
-      KINDS.includes(body.kind) ? body.kind : "post",
-      body.audience === "connections" ? "connections" : "public",
+      postKind, visibility,
       str(body.linkUrl, 500) || null,
       poll ? JSON.stringify(poll) : null,
       list(body.hashtags, 20).map(t => t.replace(/^#/, "").toLowerCase()),
@@ -196,7 +209,43 @@ router.post("/posts", handle(async (req, res) => {
       body.scheduledAt ? new Date(body.scheduledAt).toISOString() : null]
   );
 
-  const row = await loadPostRow(created.rows[0].id, me);
+  const postId = created.rows[0].id;
+
+  /*  Auto-enrol a plain public post that IS a video (an mp4 attachment) or LINKS to one
+   *  (a gate-approved provider URL) into the videos index so /videos can show it — as
+   *  pending: nothing reaches the videos feed without staff approving it in the video
+   *  console first, even though the post itself is already public in the normal feed.
+   *  Listing kinds, connections-only posts and scheduled posts stay out — they are not
+   *  public timeline content yet.  Engagement never moves: it stays on the posts row,
+   *  which is what the videos feed reads through p.
+   *  Failures are swallowed here (the post is committed); the backfill tool re-enrols
+   *  anything missed with this same classifier. */
+  if (postKind === "post" && visibility === "public" && !body.scheduledAt) {
+    try {
+      const asVideo = videos.fromPostRow({
+        media: mediaUrls,
+        media_url: mediaUrls[0] || null,
+        link_url: str(body.linkUrl, 500) || null,
+      });
+      if (asVideo) {
+        const clash = await query(
+          `SELECT id FROM videos WHERE canonical_url = $1 OR post_id = $2 LIMIT 1`,
+          [asVideo.canonicalUrl, postId]
+        );
+        if (!clash.rows.length) {
+          await query(
+            `INSERT INTO videos (post_id, kind, provider, canonical_url, media_key, embed_url,
+                                thumbnail_key, topic_ids, moderation_state, availability)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'[]','pending','ok')`,
+            [postId, asVideo.kind, asVideo.provider, asVideo.canonicalUrl, asVideo.mediaKey,
+              asVideo.embedUrl, asVideo.thumbnailKey]
+          );
+        }
+      }
+    } catch { /* not enrolment-critical */ }
+  }
+
+  const row = await loadPostRow(postId, me);
   const [post] = await hydratePosts([row], me);
   res.status(201).json(post);
 }));

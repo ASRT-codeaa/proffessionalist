@@ -44,7 +44,13 @@ class OutgoingRequest {
     this._timer = timeout ? setTimeout(() => this.emit("timeout"), timeout) : null;
     if (this._timer && this._timer.unref) this._timer.unref();
 
-    this._send(options);
+    /* Node buffers the request until write()/end() — this shim must too.  A constructor-time
+       _send() fired before mailer.js:64 ran req.end(body), so the mail Worker always received an
+       empty body and answered 400 bad_json: every password-reset mail died here in production
+       while every API-side probe said the flow was healthy. */
+    this._options = options;
+    this._started = false;
+    this._work = Promise.resolve();
   }
 
   on(name, fn) {
@@ -60,6 +66,9 @@ class OutgoingRequest {
     if (this._settled) return;
     this._settled = true;
     if (this._timer) clearTimeout(this._timer);
+    /* a transport error or the mailer's own timeout both send mailer.js into its next sleep —
+       the queue must stay awake through it, so arm before the caller's catch runs */
+    if (this._started) background.armRetryWindow();
     this.emit("error", error);
   }
 
@@ -78,6 +87,8 @@ class OutgoingRequest {
       if (this._settled) return;
       this._settled = true;
       if (this._timer) clearTimeout(this._timer);
+      /* 5xx → mailer.js will schedule another attempt after an untracked sleep (§ background.js) */
+      if (response.status >= 500) background.armRetryWindow();
       const text = await response.text();
       const carrier = new IncomingResponse(response);
       this.emit("response", carrier);
@@ -93,6 +104,10 @@ class OutgoingRequest {
 
   end(chunk) {
     if (chunk !== undefined) this.write(chunk);
+    if (!this._started) {
+      this._started = true;
+      this._send(this._options);
+    }
     background.track(this._work);
     return this;
   }

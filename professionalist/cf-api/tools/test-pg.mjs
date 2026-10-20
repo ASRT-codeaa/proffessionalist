@@ -287,4 +287,76 @@ db.exec("INSERT INTO users (username,email,password_hash,name,status,account_typ
 const row = db.prepare("SELECT id, username, created_at, status FROM users LIMIT 1").get();
 const hints = compat.resultHints("SELECT id, username, created_at, status FROM users", kinds);
 console.log("\ncodec:", JSON.stringify(compat.decodeRows([row], hints)[0]).slice(0, 160));
+
+/* ------------------------------------------------------------------ *
+ * explicit assertions for the integer generate_series -> recursive CTE rule
+ * translate, then run the emitted SQL on the schema database and check the rows
+ * ------------------------------------------------------------------ */
+let A_PASS = 0; const A_FAIL = [];
+function assert(name, ok, detail) {
+  if (ok) { A_PASS++; console.log(`  ok    ${name}`); }
+  else { A_FAIL.push(name); console.log(`  FAIL  ${name} -> ${String(detail).slice(0, 160)}`); }
+}
+const run = (sql, params = []) => { try { return db.prepare(sql).all(...params); } catch (err) { return `ERR ${err.message}`; } };
+console.log("\n== generate_series translation assertions ==");
+{
+  const asc = compat.translateSql("SELECT value FROM generate_series(1, 5) AS s", []);
+  const ascRows = run(asc.sql);
+  assert("ascending with AS alias: translated away, no notes, rows 1..5",
+    !/generate_series/i.test(asc.sql) && asc.notes.length === 0 &&
+    JSON.stringify(ascRows) === '[{"value":1},{"value":2},{"value":3},{"value":4},{"value":5}]', `${asc.sql} | ${JSON.stringify(ascRows)}`);
+
+  const desc = compat.translateSql("SELECT value FROM generate_series(11, 0, -1) AS g", []);
+  const descRows = run(desc.sql);
+  assert("descending 11..0 step -1: 12 rows, first 11 last 0, column addressable as value",
+    Array.isArray(descRows) && descRows.length === 12 && descRows[0].value === 11 && descRows[11].value === 0,
+    JSON.stringify(descRows));
+  const bare = compat.translateSql("SELECT g FROM generate_series(11, 0, -1) AS g", []);
+  const bareRows = run(bare.sql);
+  assert("bare table alias is also a column reference, the way pg names a function RTE (the admin query depends on it)",
+    Array.isArray(bareRows) && bareRows.length === 12 && bareRows[0].g === 11 && bare.notes.length === 0,
+    `${bare.sql} | ${JSON.stringify(bareRows)}`);
+
+  const col = compat.translateSql("SELECT week FROM generate_series(0, 6, 2) d(week)", []);
+  const colRows = run(col.sql);
+  assert("column-alias form d(week): the emitted column carries the given name",
+    JSON.stringify(colRows) === '[{"week":0},{"week":2},{"week":4},{"week":6}]', JSON.stringify(colRows));
+
+  const empty = compat.translateSql("SELECT COUNT(*) AS n FROM generate_series(5, 1, 2)", []);
+  const emptyRows = run(empty.sql);
+  assert("empty case (start > stop, positive step): zero rows, not one stray start",
+    JSON.stringify(emptyRows) === '[{"n":0}]', JSON.stringify(emptyRows));
+
+  const neg = compat.translateSql("SELECT value FROM generate_series(-3, 2)", []);
+  assert("negative literal start allowed: 6 rows -3..2",
+    JSON.stringify(run(neg.sql)) === '[{"value":-3},{"value":-2},{"value":-1},{"value":0},{"value":1},{"value":2}]',
+    JSON.stringify(run(neg.sql)));
+
+  const ts = compat.translateSql(
+    `SELECT COALESCE(x.n, 0)::int AS n FROM generate_series(NOW() - INTERVAL '7 weeks', NOW(), INTERVAL '1 week') d(week) LEFT JOIN (SELECT 1 AS n) x ON TRUE`, []);
+  assert("timestamp form is NOT touched by the rule and the leftover scan reports it",
+    /\bgenerate_series\s*\(/.test(ts.sql) && ts.notes.some(n => /generate_series/i.test(n)), `${ts.sql} | ${ts.notes}`);
+
+  const pm = compat.translateSql("SELECT value FROM generate_series($1, 5) AS g", ["x"]);
+  assert("parameter args are NOT guessed: text preserved, postgres-ism noted",
+    /generate_series\(\?, 5\)/.test(pm.sql) && pm.notes.some(n => /generate_series/i.test(n)), `${pm.sql} | ${pm.notes}`);
+
+  const zero = compat.translateSql("SELECT value FROM generate_series(1, 5, 0) AS g", []);
+  assert("step 0 (a pg error) is refused rather than turned into an infinite CTE",
+    /\bgenerate_series\s*\(/.test(zero.sql) && zero.notes.some(n => /generate_series/i.test(n)), `${zero.sql} | ${zero.notes}`);
+
+  const admin = compat.translateSql(
+    `SELECT to_char(month, 'YYYY-MM') AS ym
+       FROM (SELECT date_trunc('month', NOW()) - (interval '1 month' * g) AS month
+               FROM generate_series(11, 0, -1) AS g) m
+      ORDER BY month`, []);
+  const adminRows = run(admin.sql);
+  const yms = Array.isArray(adminRows) ? adminRows.map(r => r.ym) : adminRows;
+  assert("the whole admin monthlySignups statement translates without notes and yields 12 oldest-first YYYY-MM keys",
+    admin.notes.length === 0 && Array.isArray(yms) && yms.length === 12 &&
+    yms.every(s => /^\d{4}-\d{2}$/.test(s)) && yms[11] === run(`SELECT strftime('%Y-%m', 'now') AS ym`)[0].ym &&
+    yms.join() === yms.slice().sort().join(), `${admin.sql} | ${JSON.stringify(yms)}`);
+}
+console.log(`\nVERDICT: ${A_PASS} passed, ${A_FAIL.length} failed` + (A_FAIL.length ? ` (${A_FAIL.join("; ")})` : ""));
 db.close();
+if (A_FAIL.length) process.exit(1);

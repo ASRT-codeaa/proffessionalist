@@ -89,7 +89,7 @@ export function VideoActions({
 
 interface ActionButtonProps {
   label: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   count?: string;
   active?: boolean;
   busy?: boolean;
@@ -106,12 +106,11 @@ function ActionButton({ label, icon, count, active, busy, onClick }: ActionButto
       aria-busy={busy || undefined}
       disabled={busy}
       className={clsx(
-        "grid min-h-11 min-w-11 place-items-center gap-0.5 rounded-2xl px-2 py-1.5 text-[11px] font-bold leading-tight transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]",
-        active ? "text-white" : "text-white/90 hover:text-white",
+        "grid min-h-11 min-w-11 place-items-center gap-0.5 rounded-2xl px-2 py-1.5 text-[11px] font-bold leading-tight text-white/90 transition-colors",
+        "hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]",
+        active && "text-white",
         busy ? "opacity-70" : "hover:bg-white/15",
       )}
-      style={active ? { color: "#fff" } : undefined}
     >
       <span className={clsx("grid h-8 w-8 place-items-center rounded-full", active && "bg-white/20")}>
         {busy ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : icon}

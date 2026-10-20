@@ -90,6 +90,11 @@ export function subscribeSessionExpired(listener: SessionExpiredListener): () =>
   return () => sessionListeners.delete(listener);
 }
 
+/** Lets the app bridge its own 401 flow (services/http.ts) into this listener set. */
+export function notifySessionExpired(): void {
+  broadcastSessionExpired();
+}
+
 function broadcastSessionExpired(): void {
   for (const listener of sessionListeners) listener();
 }
@@ -201,7 +206,7 @@ function authHeaders(): Record<string, string> {
 async function requestJson<T>(
   method: VideoHttpMethod,
   path: string,
-  init: { body?: BodyInit | null; headers?: Record<string, string }; retryOnNetworkError?: boolean },
+  init: { body?: BodyInit | null; headers?: Record<string, string> },
   options?: VideoRequestOptions,
 ): Promise<T | undefined> {
   const controller = new AbortController();
@@ -290,14 +295,18 @@ export const defaultVideoHttp: VideoHttp = {
   },
   post<T>(path: string, body?: unknown, options?: VideoRequestOptions): Promise<T> {
     const payload = body === undefined ? null : body instanceof FormData ? body : JSON.stringify(body);
-    const headers = body === undefined || body instanceof FormData ? {} : { "Content-Type": "application/json" };
+    const headers: Record<string, string> =
+      body === undefined || body instanceof FormData ? {} : { "Content-Type": "application/json" };
     return requestJson<T>("POST", path, { body: payload, headers }, options) as Promise<T>;
   },
   put<T>(path: string, body?: unknown, options?: VideoRequestOptions): Promise<T> {
     return requestJson<T>(
       "PUT",
       path,
-      { body: body === undefined ? null : JSON.stringify(body), headers: { "Content-Type": "application/json" } },
+      {
+        body: body === undefined ? null : JSON.stringify(body),
+        headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      },
       options,
     ) as Promise<T>;
   },

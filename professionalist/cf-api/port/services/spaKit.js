@@ -44,7 +44,7 @@ class HttpError extends Error {
 /** Express 5 only forwards rejections from middleware chains we control. */
 function handle(fn) {
   return (req, res, next) => {
-    Promise.resolve(fn(req, res, next)).catch(err => {
+    return Promise.resolve(fn(req, res, next)).catch(err => {
       if (err instanceof HttpError && err.status === 400) return invalid(res, err.fields || { value: err.message });
       if (err instanceof HttpError) return fail(res, err.status, "api_error", err.message);
       console.error("spa route error:", err && err.stack);

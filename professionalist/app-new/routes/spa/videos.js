@@ -36,6 +36,14 @@ const MAX_URLS_PER_RUN = 50;
 
 const pageLimit = value => Math.max(1, Math.min(videos.MAX_PAGE, num(value, 10) || 10));
 
+/* selectVideos binds [viewer, ...params], so $1 belongs to the viewer and every WHERE parameter a
+   route adds must be numbered from $2.  builder() starts at $1 — this is the viewer-aware variant,
+   used by the feed's trending window, search's like-term, and the admin queue's state filter. */
+function routeParams() {
+  const params = [];
+  return { params, add(value) { params.push(value); return `$${params.length + 1}`; } };
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                   the feed                                 */
 /* -------------------------------------------------------------------------- */
@@ -46,7 +54,7 @@ router.get("/feed", handle(async (req, res) => {
   const limit = pageLimit(req.query.limit);
   const cursor = videos.decodeCursor(req.query.cursor);
 
-  const b = builder();
+  const b = routeParams();
   const where = [videos.PUBLIC_CLAUSE];
   const order = "v.indexed_at DESC, v.id DESC";
 
@@ -83,8 +91,7 @@ router.get("/search", handle(async (req, res) => {
   /* an empty query is the client's "type to search" state, not a request for the whole index */
   if (!term) return res.json({ items: [], nextCursor: null, query: "", total: 0 });
 
-  const b = builder([videos.likeValue ? undefined : undefined]);
-  b.params.length = 0;
+  const b = routeParams();
   const like = `%${term.replace(/[%_\\]/g, m => `\\${m}`)}%`;
   const param = b.add(like);
 
@@ -99,6 +106,8 @@ router.get("/search", handle(async (req, res) => {
     order: "v.indexed_at DESC, v.id DESC",
     limit,
     cursor,
+    /* a lookup that hides same-author matches is a broken lookup — no diversity cap here */
+    perAuthor: Number.POSITIVE_INFINITY,
   });
 
   res.json({
@@ -504,7 +513,7 @@ admin.get("/index", handle(async (req, res) => {
   const limit = pageLimit(req.query.limit);
   const cursor = videos.decodeCursor(req.query.cursor);
 
-  const b = builder();
+  const b = routeParams();
   const where = [`v.deleted_at IS NULL AND p.deleted_at IS NULL${state === "all" ? "" : ` AND v.moderation_state = ${b.add(state)}`}`];
   const counts = await query(
     `SELECT moderation_state, COUNT(*)::int AS n FROM videos WHERE deleted_at IS NULL GROUP BY moderation_state`
@@ -518,6 +527,9 @@ admin.get("/index", handle(async (req, res) => {
     limit,
     cursor,
     includeAdmin: true,
+    /* the moderation queue must show every row, not two per creator — the feed's diversity cap
+       would hide exactly the backlog an admin is here to clear */
+    perAuthor: Number.POSITIVE_INFINITY,
   });
 
   res.json({

@@ -116,11 +116,34 @@ async function main() {
     console.log(show(out).split(/\r?\n/).slice(-2)[0] || `  secret ${name}: set`);
   }
 
+  /* The AI provider key never came from the VPS — the operator uploads it straight into the
+     secure store (tmp/ai_token.txt), so it is optional here: no file, no secret, and
+     app-new/routes/spa/ai.js persists its fallback reply instead.  The value is piped on
+     stdin like every other secret and never printed. */
+  let aiToken = null;
+  try { aiToken = readTrim("tmp", "ai_token.txt"); } catch { /* not uploaded yet */ }
+  if (aiToken) {
+    const out = wrangler(["secret", "put", "AI_API_TOKEN", "-c", CONFIG], aiToken, { token, acct });
+    console.log(show(out).split(/\r?\n/).slice(-2)[0] || "  secret AI_API_TOKEN: set");
+  } else {
+    console.log("  secret AI_API_TOKEN: no ai_token.txt in the secure store — the assistant answers its fallback");
+  }
+
   const after = await api(`/accounts/${acct}/workers/scripts/${SCRIPT}/settings`, token, acct);
   /* /settings returns bindings as a flat [{type, name, ...}] array, not the keyed shape the older
      script endpoint used — printing the type names is what makes "is the D1 uuid really substituted,
      did the DO namespace get created" answerable from this output alone */
   const list = Array.isArray(after.bindings) ? after.bindings : [];
+  /* /settings reports plain_text binding NAMES but never their values, so "is this script still in
+     preview mode (MAILER_ENABLED=false)?" cannot be answered from the API after the fact.  The deploy
+     records it instead — tools/cutover.mjs refuses to flip production traffic onto a Worker whose last
+     deploy was a preview, because a flipped member must still receive password-reset mail. */
+  fs.writeFileSync(path.join(RUN_DIR, "last-deploy.json"), JSON.stringify({
+    script: SCRIPT, preview, deployed_at: new Date().toISOString(),
+    vars: list.filter(x => x.type === "plain_text").map(x => x.name).sort(),
+    secrets: list.filter(x => x.type === "secret_text").map(x => x.name).sort(),
+  }, null, 2) + "\n", { mode: 0o600 });
+  console.log(`  recorded ${path.join(RUN_DIR, "last-deploy.json")}: preview=${preview} (mode 600, no values)`);
   const byType = t => list.filter(x => x.type === t).map(x => x.name ?? x.binding).sort().join(",") || "-";
   console.log(`deployed ${SCRIPT}: d1=${byType("d1")} r2=${byType("r2_bucket")} `
     + `do=${list.filter(x => x.type === "durable_object_namespace").map(x => `${x.name}(${x.class_name})`).join(",") || "-"}`);

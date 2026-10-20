@@ -130,11 +130,17 @@ function main() {
       .replace(/^(\[\[r2_buckets\]\])$/m, "$1\nremote = true");
   }
   fs.writeFileSync(outFile, out.replace(/\s+$/, "") + "\n", { mode: 0o600 });
-  fs.writeFileSync(path.join(RUN_DIR, "dev.vars"), `${secrets.map(k => `# ${k} — copied from the VPS environment by tools/runtime-config.mjs\n${k} = ${vps.get(k)}`).join("\n")}\n`, { mode: 0o600 });
+  /* both spellings, in the config's own directory: `wrangler dev` reads the local secrets from
+     `.dev.vars` (leading dot), and it resolves it relative to the config file.  Writing only
+     `dev.vars` meant the dev sandbox had no JWT_SECRET at all, so every call that mints a token
+     answered 500 from shims/jwt.js's createHmac("sha256", undefined) — measured 2026-10-20 by the
+     route-diff run, which therefore could not reach any of the 153 authenticated endpoints. */
+  const devVars = `${secrets.map(k => `# ${k} — copied from the VPS environment by tools/runtime-config.mjs\n${k} = ${vps.get(k)}`).join("\n")}\n`;
+  for (const name of ["dev.vars", ".dev.vars"]) fs.writeFileSync(path.join(RUN_DIR, name), devVars, { mode: 0o600 });
   fs.chmodSync(outFile, 0o600);
-  fs.chmodSync(path.join(RUN_DIR, "dev.vars"), 0o600);
+  for (const name of ["dev.vars", ".dev.vars"]) fs.chmodSync(path.join(RUN_DIR, name), 0o600);
 
-  console.log(`wrote ${outFile} and ${path.join(RUN_DIR, "dev.vars")} (mode 600)${dev ? "  [dev: D1 and R2 read remotely, the Durable Object local]" : ""}`);
+  console.log(`wrote ${outFile} and ${path.join(RUN_DIR, "dev.vars")} + .dev.vars (mode 600)${dev ? "  [dev: D1 and R2 read remotely, the Durable Object local]" : ""}`);
   console.log(`  d1: professionalist-db-v2, id substituted (${dbId.length} chars, not printed)`);
   console.log(`  [vars]: ${vars.map(([k]) => k).join(", ") || "(none)"} — values not printed`);
   console.log(`  dev.vars secrets: ${secrets.join(", ") || "(none)"}`);

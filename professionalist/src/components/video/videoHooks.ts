@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 /** Honours the OS "reduce motion" setting; the feed disables smooth scrolling/animations. */
 export function usePrefersReducedMotion(): boolean {
@@ -97,7 +97,7 @@ export function useDebounced<T>(value: T, delayMs = 450): T {
 }
 
 export interface VideoActivityInput {
-  videoId: string;
+  videoId: number;
   active: boolean;
   isPlaying: boolean;
   report: (event: ActivityEventName, payload: { value_ms?: number; value_num?: number; dedupe_key: string }) => void;
@@ -119,7 +119,7 @@ export function useVideoActivity(input: VideoActivityInput): VideoActivityApi {
   const session = useActivitySession();
   const accumulated = useRef(0);
   const bucket = useRef(0);
-  const viewedRef = useRef<string | null>(null);
+  const viewedRef = useRef<number | null>(null);
   const completedRef = useRef(false);
   const reportRef = useRef(report);
   reportRef.current = report;
@@ -181,4 +181,110 @@ export function useVideoActivity(input: VideoActivityInput): VideoActivityApi {
   );
 }
 
-export type ActivityEventName = "view_start" | "watch" | "complete" | "like" | "save" | "share" | "impression";
+export type ActivityEventName =
+  | "view_start"
+  | "watch"
+  | "complete"
+  | "like"
+  | "save"
+  | "share"
+  | "follow_from_video"
+  | "impression";
+
+/**
+ * Modal focus discipline: focus moves into the container on open, Tab and Shift+Tab
+ * cycle inside it, Escape closes, and focus returns to the trigger on close. Used by
+ * the comments sheet and the per-video menu (the feed's overlays must never leak focus).
+ */
+export function useOverlayFocus(
+  containerRef: RefObject<HTMLElement | null>,
+  open: boolean,
+  onClose: () => void,
+): void {
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const container = containerRef.current;
+    const focusables = () =>
+      Array.from(
+        container?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+    const first = focusables()[0];
+    (first ?? container)?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const activeEl = document.activeElement as HTMLElement | null;
+      const index = activeEl ? items.indexOf(activeEl) : -1;
+      const next = event.shiftKey
+        ? items[(index - 1 + items.length) % items.length]
+        : items[(index + 1) % items.length];
+      if (index === -1 || activeEl === container) {
+        event.preventDefault();
+        next.focus();
+        return;
+      }
+      if (event.shiftKey && index === 0) {
+        event.preventDefault();
+        next.focus();
+      } else if (!event.shiftKey && index === items.length - 1) {
+        event.preventDefault();
+        next.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      previous?.focus?.();
+    };
+  }, [containerRef, open, onClose]);
+}
+
+/* ------------------------------------------------------------------ *
+ * Interests mirror.
+ * The videos contract has NO GET /interests — PUT replaces the whole set and
+ * echoes it back. To re-render saved weights on the next visit (and to keep
+ * "not interested" topic writes from wiping the rest of the set) the UI caches
+ * the server echo per device. It is a cache of the last server-confirmed state,
+ * never a source of truth the API is expected to agree with silently.
+ * ------------------------------------------------------------------ */
+
+const INTERESTS_MIRROR_KEY = "professionalist.videos.interests";
+
+export type InterestMirror = Record<string, number>;
+
+export function readInterestsMirror(): InterestMirror {
+  try {
+    const raw = localStorage.getItem(INTERESTS_MIRROR_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: InterestMirror = {};
+    for (const [slug, weight] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof weight === "number" && weight >= 0 && weight <= 1) out[slug] = weight;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function writeInterestsMirror(mirror: InterestMirror): void {
+  try {
+    localStorage.setItem(INTERESTS_MIRROR_KEY, JSON.stringify(mirror));
+  } catch {
+    /* private mode: the in-memory state of the current session still applies */
+  }
+}

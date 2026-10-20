@@ -287,9 +287,33 @@ function rewriteInterval(text) {
   return t;
 }
 
+/* <date expr> ± (<n> * INTERVAL '1 unit') / ± (INTERVAL '1 unit' * <n>) with a NON-constant count:
+   SQLite has no date arithmetic through the numeric -/+ operator, so fold the whole offset into
+   strftime's modifier list, where concatenation is exactly what builds the modifier string.
+   Must run before the bare product rewrites below, or they strip the parentheses first and what
+   remains (`X - (n || ' months')`) is a numeric subtraction that answers garbage with no error. */
+const VAR_INTERVAL_MUL = /\s*([+-])\s*\(\s*(?:INTERVAL\s*'1\s+(\w+)'\s*\*\s*([^()]+?)|([^()]+?)\s*\*\s*INTERVAL\s*'1\s+(\w+)')\s*\)/i;
+function rewriteVariableIntervalMul(text) {
+  let t = text;
+  for (let guard = 0; guard < 40; guard++) {
+    const m = VAR_INTERVAL_MUL.exec(t);
+    if (!m) break;
+    const sign = m[1];
+    const unit = m[2] || m[5];
+    const count = (m[3] || m[4] || "").trim();
+    if (!count) break;
+    const start = operandBefore(t, m.index);
+    const head = start === -1 ? m.index : start;
+    const lhs = start === -1 ? "" : t.slice(start, m.index);
+    t = t.slice(0, head) + isoWrap(lhs, `'${sign}' || ${count} || ' ${unitOf(unit)}'`) + t.slice(m.index + m[0].length);
+  }
+  return t;
+}
+
 function rewriteTime(text) {
   let t = text;
   t = t.replace(/'epoch'(?![\w'])/gi, "'1970-01-01T00:00:00.000Z'");
+  t = rewriteVariableIntervalMul(t);
   /* (expr * INTERVAL '1 unit') and INTERVAL '1 unit' * expr carry a non-constant count.
      The app writes the keyword in both cases, so these must be case-insensitive. */
   t = t.replace(/\(\s*([^()]+?)\s*\*\s*INTERVAL\s*'1\s+(\w+)'\s*\)/gi, (m, n, u) => `(${n} || ' ${unitOf(u)}')`);
@@ -364,6 +388,73 @@ function rewriteSets(text) {
     (m, arr) => `(SELECT value FROM json_each(${asJsonArray(arr.trim())}))`);
   t = t.replace(/\bARRAY\s*\[([^\]]*)\]/gi, (m, inner) => `json_array(${inner.trim() || "NULL"})`);
   return t;
+}
+
+/* ------------------------------------------------------------------ *
+ * integer generate_series used as a FROM item
+ * D1 has no generate_series at all (measured: `SELECT * FROM generate_series(1,5)` ->
+ * "no such table: generate_series").  When every argument is a plain integer literal the
+ * series becomes a recursive CTE inside a parenthesised subquery — the form measured
+ * working on live D1 on 2026-10-30.  ONLY numeric literals are matched, so the timestamp
+ * form generate_series(NOW() - INTERVAL '7 weeks', NOW(), INTERVAL '1 week') stays untouched
+ * for its hand port; a $n arg has already become ? by now and matches neither, and in both
+ * cases the leftover scan reports the surviving GENERATE_SERIES rather than a half-match.
+ * Column addressing follows pg: bare -> column `value`; `AS g` -> table alias g whose column is
+ * addressable as both `value` and the bare alias (pg names a function-RTE's column after the
+ * alias, and the admin query references it that way); `AS g(x)` / `g(x)` -> the column is x.
+ * ------------------------------------------------------------------ */
+const GS_NUMERIC = /^-?\s*\d+$/;
+const GS_NOT_ALIAS = new Set(["where", "from", "group", "order", "limit", "offset", "join", "inner",
+  "left", "right", "full", "cross", "natural", "on", "using", "having", "window", "union", "except",
+  "intersect", "select", "values", "as", "desc", "asc"]);
+
+/* null = do not translate this call.  pg names a plain-aliased function's column after the
+   table (SELECT ... FROM generate_series(…) AS g WHERE-ish … g), so `AS g` emits BOTH spellings:
+   column `value` plus a duplicate under the alias name, keeping `value`, bare `g` and `g.value`
+   addressable.  An explicit column list (g(x)/d(week)) is pg's rename, so only x is emitted. */
+function generateSeriesCte(args, n, aliasName, colAlias) {
+  if (args.length < 2 || args.length > 3 || !args.every(a => GS_NUMERIC.test(a.trim()))) return null;
+  const [start, stop] = args.map(a => Number(a.trim()));
+  const step = args.length === 3 ? Number(args[2].trim()) : 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(stop) || !Number.isSafeInteger(step) || step === 0) return null;
+  /* pg yields no rows when the step points away from the stop: the WHERE guard on the
+     anchor is what makes the zero-row case zero rows instead of one stray start value */
+  const toward = step < 0 ? `${start} >= ${stop}` : `${start} <= ${stop}`;
+  /* one step per recursion, compared against the stop with the SIGN of the step — the guard
+     that actually terminates, including when step and direction disagree */
+  const next = step < 0 ? `value - ${-step}` : `value + ${step}`;
+  const cmp = step < 0 ? ">=" : "<=";
+  const name = `pg_gs_${n}`;
+  const emit = colAlias ? `value AS ${colAlias}` : aliasName && aliasName !== "value" ? `value, value AS ${aliasName}` : "value";
+  return `(WITH RECURSIVE ${name}(value) AS (SELECT ${start} WHERE ${toward} UNION ALL SELECT ${next} FROM ${name} WHERE ${next} ${cmp} ${stop}) SELECT ${emit} FROM ${name})`;
+}
+
+function rewriteGenerateSeries(text) {
+  const shield = literalShield(text);
+  const re = /\bGENERATE_SERIES\s*\(/gi;
+  let out = "", i = 0, m, n = 0;
+  while ((m = re.exec(text))) {
+    if (shield[m.index] || m.index < i) { re.lastIndex = Math.max(re.lastIndex, i); continue; }
+    const open = m.index + m[0].length - 1;
+    const close = matchParen(text, open);
+    if (close === -1) break;
+    /* only a FROM item can be replaced: the same call in a SELECT list is scalar and the
+       parenthesised CTE would not parse there */
+    const before = text.slice(0, m.index).replace(/\s+$/, "");
+    /* AS g / g / AS g(x) / g(x); a following SQL keyword is not an alias */
+    const tail = /^\s+(?:AS\s+)?([a-z_]\w*)(?:\s*\(\s*([a-z_]\w*)\s*\))?(?![\w(])/i.exec(text.slice(close + 1));
+    const alias = tail && !GS_NOT_ALIAS.has(tail[1].toLowerCase()) ? tail : null;
+    const cte = /\b(?:FROM|JOIN|INNER|LEFT|RIGHT|FULL|CROSS|NATURAL|,)$/i.test(before)
+      ? generateSeriesCte(splitTop(text.slice(open + 1, close)), n,
+          alias && !alias[2] ? alias[1] : null, alias && alias[2])
+      : null;
+    if (cte === null) { re.lastIndex = open + 1; continue; }
+    out += text.slice(i, m.index) + cte + (alias ? ` AS ${alias[1]}` : "");
+    n++;
+    i = close + 1 + (alias ? alias[0].length : 0);
+    re.lastIndex = i;
+  }
+  return out + text.slice(i);
 }
 
 /* col -> 'key' / col -> 0  =>  json_extract(col, '$.key' / '$[0]'); ->> behaves the same here.
@@ -482,6 +573,7 @@ function translateSql(text, params) {
   sql = foldCalls(sql, FUNCTIONS);
   sql = rewriteTime(sql);
   sql = rewriteSets(sql);
+  sql = rewriteGenerateSeries(sql);
   sql = rewriteJsonOperators(sql);
 
   const mask = maskLiterals(sql);

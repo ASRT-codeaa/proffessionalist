@@ -115,7 +115,17 @@ function fakePort() {
   spa.get("/posts/feed", (req, res) => res.json({ feed: true }));
   const platform = shim.Router();
   platform.get("/posts/:id", (req, res) => res.json({ post: req.params.id }));
-  return { authenticate, auth, authMail, admin, meta, onboarding, spa, platform };
+  const videos = shim.Router();
+  videos.get("/feed", (req, res) => res.json({ videos: true }));
+  const safety = shim.Router();
+  safety.get("/mutes", (req, res) => res.json({ mutes: true }));
+  const support = shim.Router();
+  support.get("/support/probe", (req, res) => res.json({ support: true }));
+  const ads = shim.Router();
+  ads.get("/ads/probe", (req, res) => res.json({ ads: true }));
+  const ai = shim.Router();
+  ai.get("/ai/probe", (req, res) => res.json({ ai: true }));
+  return { authenticate, auth, authMail, admin, meta, onboarding, spa, platform, videos, safety, support, ads, ai };
 }
 
 const PORT = fakePort();
@@ -127,6 +137,8 @@ const portStandIn = request => {
   const map = {
     "auth.js": PORT.auth, "auth-mail.js": PORT.authMail, "admin.js": PORT.admin,
     "meta.js": PORT.meta, "onboarding.js": PORT.onboarding, "spa.js": PORT.spa, "platform.js": PORT.platform,
+    "videos.js": PORT.videos, "safety.js": PORT.safety,
+    "support.js": PORT.support, "ads.js": PORT.ads, "ai.js": PORT.ai,
   };
   return map[file];
 };
@@ -329,10 +341,10 @@ const MOUNT_ORDER = [
   'app.use("/api/admin", adminRoutes);',
   'app.use("/api/meta"',
   'app.use("/api/onboarding"',
-  'app.use("/api", authenticate, userLimiter, spaRoutes, platformRoutes);',
+  'app.use("/api", authenticate, userLimiter, safetyRoutes, supportRoutes, adsRoutes, aiRoutes, spaRoutes, platformRoutes);',
 ];
 const mountAt = MOUNT_ORDER.map(needle => apiSrc.indexOf(needle));
-check("the mount order is server.js:145-158's, auth → auth-mail → admin → meta → onboarding → /api",
+check("the mount order is server.js:145-158's, auth → auth-mail → admin → meta → onboarding → /api (safety/support/ads/ai joined into the catch-all chain, not a second /api pass)",
   mountAt.every(at => at >= 0) && mountAt.every((at, i) => i === 0 || at > mountAt[i - 1]),
   JSON.stringify(mountAt));
 
@@ -394,6 +406,10 @@ console.log("\n== the public surface ==");
   for (const [name, at] of [["auth", "/api/auth/ping"], ["auth-mail", "/api/auth/mail-probe"], ["admin", "/api/admin/probe"], ["meta", "/api/meta/probe"], ["onboarding", "/api/onboarding/probe"]]) {
     const out = await call({ path: at });
     check(`the ${name} mount reaches its router (server.js:145-158)`, out.status === 200, `${out.status} ${out.text}`);
+  }
+  for (const [name, at] of [["support", "/api/support/probe"], ["ads", "/api/ads/probe"], ["ai", "/api/ai/probe"]]) {
+    const out = await call({ path: at });
+    check(`the ${name} router is inside the /api catch-all chain and reaches its own paths`, out.status === 200, `${out.status} ${out.text}`);
   }
 
   const thrown = await call({ path: "/api/auth/boom" });

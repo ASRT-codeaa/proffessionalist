@@ -1,6 +1,6 @@
-const { query } = require("../../db");
-const dto = require("../../services/spaDto");
-const kit = require("../../services/spaKit");
+const { query } = require("../db");
+const dto = require("./spaDto");
+const kit = require("./spaKit");
 
 /* -------------------------------------------------------------------------- *
  *  Video service: the provider gate, the ranking model and the item DTO.
@@ -226,6 +226,39 @@ function gateUrl(raw) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*               a posts row seen as a video, or nothing                      */
+/* -------------------------------------------------------------------------- */
+
+const VIDEO_FILE = /^\/uploads\/[\w./-]+\.(mp4|webm|mov|m4v)(\?|#|$)/i;
+
+/**
+ * One row of `posts` in, the videos-row shape out, or null.  This is the ONLY classifier
+ * that decides whether a post is a video: the intake hook (routes/spa/feed.js POST /posts)
+ * and the backfill tool (tools/backfill-post-videos.mjs) both call it, so a post can never
+ * be enrolled one way today and another way tomorrow.  The caller owns the post_type and
+ * visibility filter — this function only looks at media and links.
+ */
+function fromPostRow(post) {
+  const candidates = [post.media_url, ...jsonList(post.media)]
+    .filter(url => typeof url === "string" && VIDEO_FILE.test(url));
+  if (candidates.length) {
+    const url = candidates[0];
+    return { kind: "upload", provider: "self", canonicalUrl: url, mediaKey: url, embedUrl: null, thumbnailKey: null };
+  }
+  const link = typeof post.link_url === "string" ? post.link_url.trim() : "";
+  if (link) {
+    const gate = gateUrl(link);
+    if (gate.outcome === "ok") {
+      return {
+        kind: "link", provider: gate.provider, canonicalUrl: gate.canonical,
+        mediaKey: null, embedUrl: gate.embed, thumbnailKey: gate.thumbnail,
+      };
+    }
+  }
+  return null;
+}
+
+/* -------------------------------------------------------------------------- */
 /*                              ranking features                              */
 /* -------------------------------------------------------------------------- */
 
@@ -340,7 +373,10 @@ const scoreOf = (candidate, weights, repeats) => round(
  * than a score term, which is the difference between "diversity usually happens" and "a popularity
  * only weight vector still cannot hand one creator the page".
  */
-function rankCandidates(candidates, { weights, interests, limit }) {
+/* perAuthor is the diversity cap: 2 keeps a discovery feed from being owned by one creator, while
+   the admin queue and search pass Infinity — a moderation list or a lookup that silently drops
+   rows the caller expects to see is worse than a repetitive one. */
+function rankCandidates(candidates, { weights, interests, limit, perAuthor = MAX_PER_AUTHOR }) {
   const remaining = candidates.map(candidate => ({
     ...candidate,
     stats: Object.assign({}, candidate.stats || {}),
@@ -354,13 +390,24 @@ function rankCandidates(candidates, { weights, interests, limit }) {
     let bestScore = -1;
     for (let i = 0; i < remaining.length; i++) {
       const candidate = remaining[i];
-      if ((byAuthor.get(candidate.authorId) || 0) >= MAX_PER_AUTHOR) continue;
+      if ((byAuthor.get(candidate.authorId) || 0) >= perAuthor) continue;
       const score = scoreOf(candidate, weights, byAuthor.get(candidate.authorId) || 0);
       /* ties break on the higher id, which is the newer row: a deterministic order a cursor can
          point into without an arbitrary engine-dependent tie order */
       if (score > bestScore || (score === bestScore && bestIndex >= 0 && candidate.id > remaining[bestIndex].id)) {
         bestScore = score;
         bestIndex = i;
+      }
+    }
+    if (bestIndex === -1) {
+      /* every remaining candidate is over its author's ceiling: keep the best-scoring one anyway.
+         The cap shapes the page's order — diversity must never make approved videos unreachable */
+      for (let i = 0; i < remaining.length; i++) {
+        const score = scoreOf(remaining[i], weights, byAuthor.get(remaining[i].authorId) || 0);
+        if (score > bestScore || (score === bestScore && bestIndex >= 0 && remaining[i].id > remaining[bestIndex].id)) {
+          bestScore = score;
+          bestIndex = i;
+        }
       }
     }
     if (bestIndex === -1) break;
@@ -447,6 +494,12 @@ function toVideoItem(row, { stats, ranking, includeAdmin } = {}) {
     createdAt: dto.iso(row.created_at) || new Date().toISOString(),
     ranking: ranking || { score: 0, reasons: reasonsFor(null, null) },
   };
+  /* a link row's public identity is its watch page and its embed — the player needs the iframe
+     src without an admin grant, and both strings are public on the provider's site anyway */
+  if (item.kind === "link") {
+    item.canonicalUrl = text(row.canonical_url);
+    item.embedUrl = row.embed_url === null || row.embed_url === undefined ? null : text(row.embed_url);
+  }
   if (includeAdmin) {
     item.canonicalUrl = text(row.canonical_url);
     item.embedUrl = row.embed_url === null || row.embed_url === undefined ? null : text(row.embed_url);
@@ -499,9 +552,16 @@ function videoJoins() {
                 WHERE item_type = 'post' GROUP BY ref_id) sv ON sv.ref_id = p.id::text`;
 }
 
-/** approved + playable + not deleted + an active author: what any non-staff viewer may see. */
+/** approved + playable + not deleted + an active author: what any non-staff viewer may see.
+ *  The two NOT EXISTS are the per-viewer safety exclusions — creators this viewer muted, and
+ *  creators in any block relationship with them (a block is mutual cold storage: neither side
+ *  sees the other's clips).  $1 is the viewer, the same binding VIDEO_SELECT already uses. */
 const PUBLIC_CLAUSE = `v.deleted_at IS NULL AND p.deleted_at IS NULL
-  AND v.moderation_state = 'approved' AND v.availability = 'ok' AND u.status = 'active'`;
+  AND v.moderation_state = 'approved' AND v.availability = 'ok' AND u.status = 'active'
+  AND NOT EXISTS (SELECT 1 FROM mutes mu WHERE mu.user_id = $1::bigint AND mu.muted_id = p.user_id)
+  AND NOT EXISTS (SELECT 1 FROM blocks bl
+                    WHERE (bl.blocker_id = $1::bigint AND bl.blocked_id = p.user_id)
+                       OR (bl.blocker_id = p.user_id AND bl.blocked_id = $1::bigint))`;
 
 /** everything that exists, for staff and for the author's own reads. */
 const ANY_CLAUSE = `v.deleted_at IS NULL AND p.deleted_at IS NULL AND u.status = 'active'`;
@@ -539,7 +599,7 @@ async function selectVideos({ viewer, where, params, order, limit }) {
  * The whole read in one call: window -> attach activity -> rank -> keyset past the cursor ->
  * VIDEO_ITEMs.  Feed, search and the admin index all go through it, so there is one ranking path.
  */
-async function rankedPage({ viewer, where, params, order, window = CANDIDATE_WINDOW, limit, cursor, weights, includeAdmin }) {
+async function rankedPage({ viewer, where, params, order, window = CANDIDATE_WINDOW, limit, cursor, weights, includeAdmin, perAuthor }) {
   const config = weights || (await loadWeights()).weights;
   const candidates = await selectVideos({ viewer, where, params, order, limit: window });
   const stats = await activityStats(candidates.map(candidate => candidate.id));
@@ -549,7 +609,7 @@ async function rankedPage({ viewer, where, params, order, window = CANDIDATE_WIN
   const interests = await viewerInterests(viewer);
 
   /* rank one past the page: the extra item is what tells us a nextCursor is honest */
-  const ranked = rankCandidates(candidates, { weights: config, interests, limit: window });
+  const ranked = rankCandidates(candidates, { weights: config, interests, limit: window, perAuthor });
   const after = cursor
     ? (() => {
       const at = ranked.findIndex(candidate => candidate.id === cursor.id);
@@ -576,7 +636,7 @@ module.exports = {
   EVENTS, RANK_KEYS, DEFAULT_WEIGHTS, PROVIDERS,
   CANDIDATE_WINDOW, MAX_PAGE, MAX_PER_AUTHOR, ENGAGEMENT_K, FRESHNESS_DAYS, IMPRESSION_SATURATION,
   text, round, jsonList, encodeCursor, decodeCursor,
-  registrable, providerFor, youtubeId, gateUrl,
+  registrable, providerFor, youtubeId, gateUrl, fromPostRow, VIDEO_FILE,
   loadWeights, viewerInterests, activityStats, featuresOf, discoveryFeature, rankCandidates,
   playUrlOf, thumbnailOf, reasonsFor, toVideoItem, itemOf,
   VIDEO_SELECT, videoJoins, PUBLIC_CLAUSE, ANY_CLAUSE, selectVideos, rankedPage,

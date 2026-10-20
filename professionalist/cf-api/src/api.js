@@ -79,6 +79,11 @@ const ENV_HANDOFF = [
   "MAILER_ENABLED",
   "OPS_OWNER_ID",
   "OPS_TOKEN",
+  /* app-new/routes/spa/ai.js reads these lazily per request: AI_API_TOKEN is a secret set with
+     `wrangler secret put`, AI_API_BASE/AI_MODEL are plain vars with DeepSeek defaults in the code */
+  "AI_API_BASE",
+  "AI_MODEL",
+  "AI_API_TOKEN",
 ];
 
 /* workerd exposes [vars] on process.env and the binding object is writable, so a secret set with
@@ -156,6 +161,17 @@ function assemble() {
   /* server.js:17's `require("./routes/spa")`, a directory: port/routes/spa/index.js.  Keeping the
      extensionless form is what lets esbuild and Node both resolve it the way the VPS did. */
   const spaRoutes = require("../port/routes/spa");
+  /* app-new/routes/spa/videos.js — /api/videos, mounted ahead of the catch-all /api so its own
+     paths (which include /:id and /admin/*) are not swallowed by spa/platform prefix matching. */
+  const videoRoutes = require("../port/routes/spa/videos.js");
+  /* app-new/routes/spa/safety.js — /api/mutes and the /api/blocks READ, joined into the
+     catch-all chain below ahead of spa/platform. */
+  const safetyRoutes = require("../port/routes/spa/safety.js");
+  /* app-new/routes/spa/{support,ads,ai}.js — the three surfaces whose client calls have always
+     existed but whose routers never did; same ride-along reasoning as safetyRoutes. */
+  const supportRoutes = require("../port/routes/spa/support.js");
+  const adsRoutes = require("../port/routes/spa/ads.js");
+  const aiRoutes = require("../port/routes/spa/ai.js");
 
   const app = express();
 
@@ -300,11 +316,22 @@ function assemble() {
   app.use("/api/onboarding", authenticate, userLimiter, require("../port/routes/onboarding.js"));
 
   /**
+   * /api/videos (app-new/routes/spa/videos.js) is mounted ahead of the catch-all /api line so its
+   * own /:id and /admin/* paths are not swallowed by the prefix-matching spa/platform routers.
+   * The admin sub-router self-gates with requireStaff (videos.js:488), matching routes/admin.js.
+   */
+  app.use("/api/videos", authenticate, userLimiter, videoRoutes);
+
+  /**
    * routes/spa answers the paths the client actually calls. It has to come first:
    * platform.js matches /posts/:id and /marketplace/:id, which would otherwise
    * swallow /posts/feed and /marketplace/home before the real handler is reached.
+   * safetyRoutes rides the same chain AHEAD of spa/platform so GET /api/mutes and GET /api/blocks
+   * answer without re-running authenticate+userLimiter — a second app.use("/api", …) line would
+   * count every request twice against the user bucket.  Its unmatched paths fall through exactly
+   * like spa's do, so POST/DELETE /api/blocks/:userId still reach platform.js.
    */
-  app.use("/api", authenticate, userLimiter, spaRoutes, platformRoutes);
+  app.use("/api", authenticate, userLimiter, safetyRoutes, supportRoutes, adsRoutes, aiRoutes, spaRoutes, platformRoutes);
 
   app.use((req, res) => {
     envelope(res, 404, "not_found", `No endpoint for ${req.method} ${req.originalUrl}`);

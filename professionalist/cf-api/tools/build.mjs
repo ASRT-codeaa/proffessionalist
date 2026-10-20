@@ -22,7 +22,31 @@ import { fileURLToPath } from "node:url";
 const HERE = fileURLToPath(import.meta.url);
 const CF_API = join(HERE, "..", "..");
 const MIRROR = "/workspaces/app-mirror/app";
+const APPNEW = join(CF_API, "..", "app-new");
 const PORT = join(CF_API, "port");
+
+/* Files authored under app-new/ (the overlay for this feature) that are NOT in the read-only mirror
+   but must land in port/ with the same depth-aware bare-specifier rewriting as a mirror copy.  Their
+   relative require("./x") graph is written against the port/mirror layout (../../db, ../services/…),
+   so the destination path under port/ must match the source path under app-new/. */
+const EXTRA_FILES = [
+  { rel: "routes/spa/videos.js", src: join(APPNEW, "routes", "spa", "videos.js") },
+  { rel: "services/videoKit.js", src: join(APPNEW, "services", "videoKit.js") },
+  /* feed.js overlays a mirror file, and the overlay loops apply NO hand ports, so app-new's copy is
+     authored on the PORTED bytes (it carries the D1 json_each fix itself) — keep it that way. */
+  { rel: "routes/spa/feed.js", src: join(APPNEW, "routes", "spa", "feed.js") },
+  /* safety.js is a NEW file (no mirror twin), so bare specifiers and $n placeholders are fine here. */
+  { rel: "routes/spa/safety.js", src: join(APPNEW, "routes", "spa", "safety.js") },
+  /* support/ads/ai are NEW files too — routers for paths the client always called and the
+     Worker never answered; see docs/surfaces-api-contract.md. */
+  { rel: "routes/spa/support.js", src: join(APPNEW, "routes", "spa", "support.js") },
+  { rel: "routes/spa/ads.js", src: join(APPNEW, "routes", "spa", "ads.js") },
+  { rel: "routes/spa/ai.js", src: join(APPNEW, "routes", "spa", "ai.js") },
+];
+
+/* The D1 (SQLite) form of the videos migration, applied at build time into the manifest so
+   routes/spa/ops.js — and the node:sqlite test harness — can read it from the bundle. */
+const D1_MIGRATIONS_DIR = join(APPNEW, "migrations-d1");
 
 /* ------------------------------------------------------------------ tables */
 
@@ -233,6 +257,21 @@ const HAND_PORTS = {
       count: 1,
     },
   ],
+  "services/spaKit.js": [
+    {
+      /* handle() wraps every async route in the port.  src/shims/express.js runStack awaits a
+         handler's result only when it is a thenable (line 123-124); as written handle() returns
+         undefined, so an async route that neither responds nor calls next() synchronously lets the
+         chain end before res.json runs — app.handle then 404s a route that would have answered
+         (measured by tools/test-videos.mjs driving the real /api/videos router through the shim).
+         Returning the promise costs nothing and makes the awaited response land.  The mirror file is
+         untouched; this is a port-only correction, exactly like the ops.js/onboarding.js edits. */
+      name: "handle(): return the promise so the shim awaits async routes",
+      find: `    Promise.resolve(fn(req, res, next)).catch(err => {`,
+      replace: `    return Promise.resolve(fn(req, res, next)).catch(err => {`,
+      count: 1,
+    },
+  ],
   "routes/spa/ops.js": [
     {
       /* mirror line 3.  The manifest (generated below) is the build-time snapshot of
@@ -279,6 +318,90 @@ const HAND_PORTS = {
       name: "run: readFileSync -> manifest sql",
       find: `  const sql = fs.readFileSync(target, "utf8");`,
       replace: `  const sql = entry.sql;`,
+      count: 1,
+    },
+  ],
+  "routes/spa/social.js": [
+    {
+      /* mirror lines 92-97 (/search/suggestions).  pg-compat rewrites FROM unnest(x) AS alias to
+         (SELECT value FROM json_each(x)) AS alias, which is NOT a correlated form: SQLite refuses a
+         subquery in FROM that references a column of another FROM item, so live D1 answered
+         `no such column: hashtags at offset 93` and the endpoint 500'd (measured 2026-10-20,
+         tools/diff-routes.mjs DEFECT B-get500:/api/search/suggestions).  A table-valued function IS
+         correlated — measured working: FROM posts p, json_each(COALESCE(p.hashtags,'[]')) jt.  The
+         array column stores JSON text in D1 (compat/columns.json, tools/copy-data.mjs pgArrayToJson),
+         so the empty default is '[]', not PostgreSQL's '{}'.  The alias keeps the column name the
+         route reads (r.tag) and $1 stays in the same position. */
+      name: "hashtag suggestions: correlated unnest -> json_each table-valued function",
+      find: `    \`SELECT tag, COUNT(*)::int AS n
+       FROM posts, unnest(COALESCE(hashtags, '{}')) AS tag
+      WHERE deleted_at IS NULL \${term ? "AND LOWER(tag) LIKE $1" : ""}
+      GROUP BY tag ORDER BY n DESC LIMIT 6\`,`
+      ,
+      replace: `    \`SELECT jt.value AS tag, COUNT(*)::int AS n
+       FROM posts, json_each(COALESCE(posts.hashtags, '[]')) AS jt
+      WHERE deleted_at IS NULL \${term ? "AND LOWER(jt.value) LIKE $1" : ""}
+      GROUP BY jt.value ORDER BY n DESC LIMIT 6\`,`
+      ,
+      count: 1,
+    },
+    {
+      /* mirror lines 530-536 (/users/me/progress, the 9th Promise.all query).  D1 has no
+         generate_series at all (measured: `no such table: generate_series`) and pg-compat translates
+         only the <expr> +/- INTERVAL 'n unit' form, so the bare INTERVAL '1 week' step argument
+         reached SQLite verbatim: `near "'1 week'": syntax error at offset 165` (DEFECT
+         B-get500:/api/users/me/progress).  Eight week-buckets built with a recursive CTE — which a
+         subquery in FROM does support (measured) — produce the same oldest-first 8 rows; the week
+         start uses the identical Monday truncation pg-compat already applies to date_trunc('week')
+         (pg-compat.js:190), so the join keys on both sides still line up. */
+      name: "weekly post trend: generate_series over timestamps -> recursive CTE",
+      find: `      \`SELECT COALESCE(x.n, 0)::int AS n
+         FROM generate_series(NOW() - INTERVAL '7 weeks', NOW(), INTERVAL '1 week') d(week)
+         LEFT JOIN (SELECT date_trunc('week', created_at) AS week, COUNT(*) AS n
+                      FROM posts WHERE user_id = $1 AND deleted_at IS NULL GROUP BY 1) x
+                ON x.week = date_trunc('week', d.week)
+        ORDER BY d.week\``,
+      replace: `      \`SELECT COALESCE(x.n, 0)::int AS n
+         FROM (WITH RECURSIVE d(k) AS (SELECT 7 UNION ALL SELECT k - 1 FROM d WHERE k > 0)
+               SELECT strftime('%Y-%m-%dT00:00:00.000Z', 'now', '-' || (d.k * 7) || ' days', 'weekday 0', '-6 days') AS week FROM d) gen
+         LEFT JOIN (SELECT strftime('%Y-%m-%dT00:00:00.000Z', created_at, 'weekday 0', '-6 days') AS week, COUNT(*) AS n
+                      FROM posts WHERE user_id = $1 AND deleted_at IS NULL GROUP BY 1) x
+                ON x.week = gen.week
+        ORDER BY gen.week\``,
+      count: 1,
+    },
+  ],
+  "routes/spa/market.js": [
+    {
+      /* mirror lines 550-556 — the company analytics dashboard's copy of the same weekly trend
+         query, differing only in company_id = $1.  Same reason, same port. */
+      name: "weekly post trend: generate_series over timestamps -> recursive CTE",
+      find: `      \`SELECT COALESCE(x.n, 0)::int AS n
+         FROM generate_series(NOW() - INTERVAL '7 weeks', NOW(), INTERVAL '1 week') d(week)
+         LEFT JOIN (SELECT date_trunc('week', created_at) AS week, COUNT(*) AS n
+                      FROM posts WHERE company_id = $1 AND deleted_at IS NULL GROUP BY 1) x
+                ON x.week = date_trunc('week', d.week)
+        ORDER BY d.week\``,
+      replace: `      \`SELECT COALESCE(x.n, 0)::int AS n
+         FROM (WITH RECURSIVE d(k) AS (SELECT 7 UNION ALL SELECT k - 1 FROM d WHERE k > 0)
+               SELECT strftime('%Y-%m-%dT00:00:00.000Z', 'now', '-' || (d.k * 7) || ' days', 'weekday 0', '-6 days') AS week FROM d) gen
+         LEFT JOIN (SELECT strftime('%Y-%m-%dT00:00:00.000Z', created_at, 'weekday 0', '-6 days') AS week, COUNT(*) AS n
+                      FROM posts WHERE company_id = $1 AND deleted_at IS NULL GROUP BY 1) x
+                ON x.week = gen.week
+        ORDER BY gen.week\``,
+      count: 1,
+    },
+  ],
+  "routes/spa/feed.js": [
+    {
+      /* mirror line 83 — the ?hashtag= filter.  Same non-correlated unnest problem as social.js, but
+         invisible in a sweep that never passes the parameter: EXISTS (SELECT 1 FROM unnest(...) AS
+         t(tag)) is exactly the form SQLite cannot correlate.  Measured working: EXISTS (SELECT 1 FROM
+         json_each(COALESCE(p.hashtags,'[]')) jt WHERE LOWER(jt.value) = ?) returned the two posts
+         that carry careergrowth.  b.add(hashtag) keeps its parameter position. */
+      name: "feed hashtag filter: correlated unnest -> json_each table-valued function",
+      find: "`EXISTS (SELECT 1 FROM unnest(COALESCE(p.hashtags, '{}')) AS t(tag) WHERE LOWER(t.tag) = ${b.add(hashtag)})`",
+      replace: "`EXISTS (SELECT 1 FROM json_each(COALESCE(p.hashtags, '[]')) AS jt WHERE LOWER(jt.value) = ${b.add(hashtag)})`",
       count: 1,
     },
   ],
@@ -384,6 +507,23 @@ for (const rel of files) {
   });
 }
 
+/* 1b. app-new overlay copies: same rewriting, no hand ports (these files never touch fs/__dirname). */
+for (const { rel, src } of EXTRA_FILES) {
+  const original = readFileSync(src, "utf8");
+  const { text, changed, hits } = rewriteBare(rel, original);
+  const dest = join(PORT, rel);
+  mkdirSync(join(dest, ".."), { recursive: true });
+  writeFileSync(dest, text);
+  stats.copied++;
+  for (const [spec, n] of Object.entries(hits)) stats.rewritten[spec] = (stats.rewritten[spec] || 0) + n;
+  stats.diffReport.push({
+    rel,
+    rewriteLines: changed.length,
+    handPortLines: 0,
+    lines: text.split("\n").length,
+  });
+}
+
 function countDiffLines(aText, bText) {
   /* count changed LINES, not zip mismatches: the onboarding port deletes line 2 outright, and a
      naive index compare would then flag all 216 remaining lines as changed (the shift, not the
@@ -421,11 +561,17 @@ for (const [rel, { body }] of Object.entries(PROXY_FILES)) {
 }
 
 /* 3. _shim proxies, on demand, sorted */
-const usedShims = [...new Set(files.flatMap(rel => {
-  const original = readFileSync(join(MIRROR, rel), "utf8");
-  const { text } = rewriteBare(rel, applyHandPorts(rel, original).text);
-  return [...text.matchAll(/require\((['"])(\.[^'"]*\/_shim\/([^'"]+))\1\)/g)].map(m => m[3]);
-}))].sort();
+const usedShims = [...new Set([
+  ...files.flatMap(rel => {
+    const original = readFileSync(join(MIRROR, rel), "utf8");
+    const { text } = rewriteBare(rel, applyHandPorts(rel, original).text);
+    return [...text.matchAll(/require\((['"])(\.[^'"]*\/_shim\/([^'"]+))\1\)/g)].map(m => m[3]);
+  }),
+  ...EXTRA_FILES.map(({ rel, src }) => {
+    const { text } = rewriteBare(rel, readFileSync(src, "utf8"));
+    return [...text.matchAll(/require\((['"])(\.[^'"]*\/_shim\/([^'"]+))\1\)/g)].map(m => m[3]);
+  }).flat(),
+])].sort();
 mkdirSync(join(PORT, "_shim"), { recursive: true });
 for (const name of usedShims) {
   if (!(name in SHIM_BODIES)) throw new Error(`rewrite table produced _shim/${name} with no proxy body`);
@@ -442,6 +588,16 @@ const entries = readdirSync(migDir).filter(f => MIG_RE.test(f)).sort().map(name 
   name,
   sql: readFileSync(join(migDir, name), "utf8"),
 }));
+/* app-new/migrations-d1 holds the D1 (SQLite) form of this feature's migration — the Worker (and
+   the node:sqlite test harness) can only run SQLite dialect, not the mirror's Postgres form.  Merge
+   it in sorted by name alongside the mirror entries. */
+if (existsSync(D1_MIGRATIONS_DIR)) {
+  for (const name of readdirSync(D1_MIGRATIONS_DIR).filter(f => MIG_RE.test(f)).sort()) {
+    if (entries.some(e => e.name === name)) continue;
+    entries.push({ name, sql: readFileSync(join(D1_MIGRATIONS_DIR, name), "utf8") });
+  }
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
 const manifestBytes = entries.reduce((n, e) => n + e.sql.length, 0);
 const manifest = `/* Generated by tools/build.mjs from /workspaces/app-mirror/app/migrations — do not edit; it is
    wiped on every build.  ${entries.length} files, ${manifestBytes} SQL bytes.  routes/spa/ops.js reads

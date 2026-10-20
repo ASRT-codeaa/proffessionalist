@@ -29,6 +29,10 @@
        the value reaching the literal is the true original bytes.
 
    node cf-api/tools/copy-data.mjs --dump=<pg_dump --data-only file[.gz]> [--dry-run]
+   ... [--refresh] re-copy into a database that already holds a snapshot: clears the 49 app tables in
+       reverse FK order (self-referential ones peeled leaf by leaf) and re-inserts the dump. Refuses if
+       an api.* hostname is already bound, if the dump looks truncated vs D1, or if a D1-only feature
+       table still references a table being cleared — each refusal is overridable with --force.
    ... | --counts   (read D1 per-table counts back)
    ... | --spot     (run the app's own query shapes through src/db.js against the loaded D1)
    ... | --skip=<table,table>  (exclude tables that are not application data) */
@@ -51,6 +55,11 @@ const argv = process.argv.slice(2);
 const flag = n => argv.includes(`--${n}`);
 const opt = (n, d) => { const m = argv.find(a => a.startsWith(`--${n}=`)); return m ? m.slice(n.length + 3) : d; };
 const DRY = flag("dry-run");
+/* --refresh re-copies INTO a database that already holds a snapshot (the cutover's quiet window),
+   so it deletes the app tables first. It is opt-in precisely because it deletes: without the flag
+   this tool only ever adds rows, and a non-empty target is the operator's signal to look closer. */
+const REFRESH = flag("refresh");
+const FORCE = flag("force");
 const SKIP = new Set(opt("skip", "").split(",").map(s => s.trim()).filter(Boolean));
 
 /* A single 50k-row table must not exceed D1's request ceiling; cap well below the documented
@@ -307,11 +316,107 @@ function buildInsert(tbl, cols, row) {
   return `INSERT INTO "${tbl}" (${list}) VALUES (${vals.join(", ")});`;
 }
 
+/* Tables that exist in D1 but not in the Postgres snapshot are feature tables the Worker writes on
+   its own — the videos DDL arrives through tools/apply-videos-schema.mjs, so compat/schema.sql (and
+   with it this tool's FK graph) does not describe them. A refresh deliberately leaves them alone, but
+   a row in one of them that points at a table being cleared makes the ordered DELETE fail halfway
+   and leave a partial snapshot, so those tables are named and refused before anything is deleted. */
+async function unknownTables(loadSet) {
+  const res = await q("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+  const out = [];
+  for (const r of res.results) {
+    if (loadSet.has(r.name)) continue;
+    const refs = [...String(r.sql || "").matchAll(/REFERENCES "([a-z_0-9]+)"/gi)].map(m => m[1]);
+    out.push({ name: r.name, rows: await countOf(r.name), parents: refs.filter(p => loadSet.has(p)) });
+  }
+  return out;
+}
+
+/* Everything a refresh needs to know before it deletes anything — all three reads are harmless, so the
+   dry run can show the operator exactly which refusal the real run would hit. */
+async function refreshState(dumpRows) {
+  const bound = await trafficBinding();
+  const held = await appRowCount([...loadNames]);
+  const extras = await unknownTables(loadNames);
+  const blocking = extras.filter(e => e.rows && e.parents.length);
+  console.log(`refresh: D1 currently holds ${held} rows in the ${loadNames.size} snapshot tables; the dump carries ${dumpRows}`);
+  console.log(`refresh: traffic ${bound.hostname ? `${bound.hostname} -> "${bound.script}" (BOUND)` : bound.detail ? `check unavailable (${bound.detail})` : "no api.* hostname bound (shadow only)"}`);
+  if (extras.length) console.log(`refresh: D1-only tables, left alone: ${extras.map(e => `${e.name}=${e.rows}`).join(", ")}`);
+  return { bound, held, extras, blocking };
+}
+
+/* ------------------------------------------------------------------ *
+ * --refresh: clear the snapshot D1 already holds, then let the normal load re-copy it
+ * ------------------------------------------------------------------ */
+
+/* Is production traffic already answering from this Worker? A refresh empties every app table for
+   the seconds between the DELETEs and the re-inserts, which is exactly the user-visible breakage the
+   mandate forbids — so it needs the operator's --force, i.e. the deliberate quiet window. Read-only
+   GET /workers/domains, the same authority cutover.mjs treats as the truth about who answers a name. */
+async function trafficBinding() {
+  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${ACCT}/workers/domains`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  const text = await r.text();
+  let j;
+  try { j = JSON.parse(text); } catch { return { detail: `unreadable ${r.status}` }; }
+  if (!j.success) return { detail: (j.errors || []).map(e => `${e.code}: ${e.message}`).join("; ").slice(0, 120) };
+  const hit = (j.result || []).find(d => /^api\./i.test(String(d.hostname ?? d)));
+  return hit ? { hostname: String(hit.hostname ?? hit), script: String(hit.script ?? hit.service ?? "?") } : {};
+}
+
+async function countOf(t) {
+  const res = await q(`SELECT COUNT(*) AS n FROM "${t}"`);
+  return Number(Object.values(res.results[0])[0]);
+}
+
+/* the same 4-arms-per-request batching the --counts read-back uses (D1 refuses > ~4 UNION arms, §314) */
+async function appRowCount(names) {
+  let n = 0;
+  for (let i = 0; i < names.length; i += 4) {
+    const sql = names.slice(i, i + 4).map(t => `SELECT COUNT(*) AS n FROM "${t}"`).join(" UNION ALL ");
+    for (const r of (await q(sql)).results) n += Number(Object.values(r)[0]);
+  }
+  return n;
+}
+
+/* D1 enforces foreign keys over HTTP and ignores PRAGMA foreign_keys=OFF (§5.2), so the clear runs in
+   the exact reverse of the load order — children before parents across tables. Within a
+   self-referential table a plain DELETE FROM aborts on the first parent row whose child is still
+   there, so that table is peeled leaf by leaf: delete the rows nobody references, repeat. A pass that
+   removes nothing while rows remain is a genuine cycle, and this says so instead of looping forever. */
+async function refreshClear(order) {
+  const rev = [...order].reverse();
+  const done = [];
+  for (const t of rev) {
+    const before = await countOf(t);
+    if (!before) { done.push(`${t}: 0 rows, nothing to clear`); continue; }
+    const s = TABLES[t].self[0];
+    if (!s) {
+      await q(`DELETE FROM "${t}";`);
+      done.push(`${t}: -${before}`);
+      continue;
+    }
+    let prev = -1, passes = 0;
+    for (;;) {
+      const n = await countOf(t);
+      if (!n) break;
+      if (n === prev) throw new Error(`${t}: ${n} rows still reference each other after ${passes} leaf-peel `
+        + `passes (${s.ref} <- ${s.col}) — a real self-FK cycle, which no ordered delete can clear. `
+        + `D1 now holds a PARTIAL snapshot: do NOT flip traffic onto it; fix the rows and re-run.`);
+      prev = n; passes++;
+      await q(`DELETE FROM "${t}" WHERE "${s.ref}" NOT IN (SELECT "${s.col}" FROM "${t}" WHERE "${s.col}" IS NOT NULL);`);
+    }
+    done.push(`${t}: -${before} in ${passes} passes (self-FK ${s.ref}<-${s.col})`);
+  }
+  return done;
+}
+
 /* ------------------------------------------------------------------ *
  * load
  * ------------------------------------------------------------------ */
 const dumpPath = opt("dump", "");
-if (!dumpPath) { console.error("usage: copy-data.mjs --dump=<pg_dump --data-only file[.gz]> [--dry-run | --counts | --spot]"); process.exit(2); }
+if (!dumpPath) { console.error("usage: copy-data.mjs --dump=<pg_dump --data-only file[.gz]> [--dry-run | --counts | --spot] [--refresh [--force]]"); process.exit(2); }
 const dump = readDump(dumpPath);
 const VERIFY_ONLY = flag("counts") || flag("spot");   // reads existing D1 state; must never re-run the load
 
@@ -354,12 +459,48 @@ if (DRY) {
   }
   console.log(`\nsequences to repair (AUTOINCREMENT tables with rows): ${order.filter(t => TABLES[t].autoinc && dump.tables[t].rows.length).length}`);
   console.log(`pg sequence last-values captured from dump: ${Object.keys(dump.seq).length}`);
-  console.log("VERDICT: dry run complete; no statement sent, no rows read back.");
+  if (REFRESH) {
+    const dumpRows = [...loadNames].reduce((n, t) => n + dump.tables[t].rows.length, 0);
+    console.log(`\ndry run --refresh: would clear ${order.length} tables in this order (reverse load order),`);
+    console.log(`  ${[...order].reverse().join(" <- ")}`);
+    const st = await refreshState(dumpRows);
+    if (st.blocking.length) console.log(`  would REFUSE: ${st.blocking.map(e => `${e.name} (${e.rows} rows -> ${e.parents.join(",")})`).join(", ")} reference tables being cleared`);
+    if (st.bound.hostname) console.log("  would REFUSE without --force: the hostname is already serving traffic");
+    if (st.held && dumpRows * 2 < st.held) console.log("  would REFUSE without --force: the dump looks truncated vs D1");
+    if (!st.blocking.length && !st.bound.hostname && !(st.held && dumpRows * 2 < st.held)) console.log("  every refresh gate passes; nothing executed by this dry run");
+  }
+  console.log(`VERDICT: dry run complete; no write statement sent${REFRESH ? " (the refresh gates above are COUNT-only reads)" : ", no rows read back"}.`);
   process.exit(0);
 }
 
 /* -------- real load -------- */
 if (!VERIFY_ONLY) {
+const dumpRows = [...loadNames].reduce((n, t) => n + dump.tables[t].rows.length, 0);
+if (REFRESH) {
+  const st = await refreshState(dumpRows);
+  if (st.bound.hostname && !FORCE) {
+    console.error(`REFUSED: ${st.bound.hostname} is already answering from "${st.bound.script}" — a refresh`
+      + ` deletes every app table before re-inserting it, which users would see. Do this in the quiet`
+      + ` window with --force, or run tools/cutover.mjs --rollback first.`);
+    process.exit(1);
+  }
+  if (st.blocking.length && !FORCE) {
+    console.error(`REFUSED: ${st.blocking.map(e => `${e.name} (${e.rows} rows -> ${e.parents.join(",")})`).join(", ")}`
+      + ` reference tables this refresh clears, so the ordered DELETE would abort halfway. Empty those`
+      + ` tables (or re-dump so their parents exist) — --force to try anyway and accept a partial snapshot.`);
+    process.exit(1);
+  }
+  if (st.held && dumpRows * 2 < st.held && !FORCE) {
+    console.error(`REFUSED: the dump holds ${dumpRows} rows but D1 holds ${st.held}. A truncated or stale`
+      + ` dump would DELETE the difference permanently. Check the dump (and the --skip list) — --force to proceed anyway.`);
+    process.exit(1);
+  }
+  console.log(`\nrefresh: clearing ${st.held} existing rows`);
+  (await refreshClear(order)).forEach(l => console.log("  " + l));
+  const left = await appRowCount([...loadNames]);
+  console.log(`refresh: D1 app rows after clear = ${left}${left ? "  <-- NOT EMPTY, aborting before any insert" : ""}`);
+  if (left) process.exit(1);
+}
 console.log(`\nloading ${order.length} tables into ${DB_ID ? "professionalist-db-v2" : "D1"} (target must be v2; verify count-rows first)\n`);
 const perTable = {};
 for (const t of order) {

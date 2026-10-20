@@ -19,7 +19,8 @@ database_id = "placeholder"
 
 # src/shims/upload.js:53-56 reads env.MEDIA and throws if it is missing, and its UPLOAD_ROOT stays
 # "/uploads" so every media URL already in the database keeps resolving (§1 success criterion 2).
-# The bucket is still to be created with the 39 backfilled files (#21).
+# Created, and filled: `node cf-api/tools/backfill-r2.mjs --verify` reads 67 keys / 92,394,392 bytes
+# back with 0 problems (the census is 67 files, not the 39 that an early read-only SSH pass counted).
 [[r2_buckets]]
 binding = "MEDIA"
 bucket_name = "professionalist-media"
@@ -86,6 +87,13 @@ IP_RATE_LIMIT = "3000"
 #                                                       # goes in as a secret, not here
 # MAILER_API_URL                                         # services/mailer.js:15 — required or mail
 #                                                       # silently stops (mailer.js:79-85 warns once)
+# AI_API_BASE = "https://api.deepseek.com/v1"           # app-new/routes/spa/ai.js — the code's own
+#                                                       # default; set a var only to point elsewhere
+# AI_MODEL = "deepseek-chat"                            # ditto, the code default
+# AI_API_TOKEN                                          # app-new/routes/spa/ai.js — an actual
+#                                                       # secret: `wrangler secret put AI_API_TOKEN`,
+#                                                       # never a [vars] line.  Absent = the assistant
+#                                                       # answers its stored fallback message.
 
 # No [triggers]: the VPS has no cron and nothing in this Worker needs one (§3, "no cron, no
 # background writers").  src/worker.js therefore exports no scheduled() handler; adding a cron here
