@@ -1,0 +1,2623 @@
+{
+ "ad_campaigns": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "name",
+   "pg": "character varying(200)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "objective",
+   "pg": "character varying(30)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "audience",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": true,
+   "default": "emptyjson"
+  },
+  {
+   "name": "budget",
+   "pg": "numeric(14,2)",
+   "kind": "numeric",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "spend",
+   "pg": "numeric(14,2)",
+   "kind": "numeric",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "start_date",
+   "pg": "date",
+   "kind": "date",
+   "notNull": false
+  },
+  {
+   "name": "end_date",
+   "pg": "date",
+   "kind": "date",
+   "notNull": false
+  },
+  {
+   "name": "format",
+   "pg": "character varying(40)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "creative_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "creative_text",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "destination",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "status",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "metrics",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "ai_conversations": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "title",
+   "pg": "character varying(200)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "ai_messages": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "conversation_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "role",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "body",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "app_content": [
+  {
+   "name": "key",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true,
+   "pk": "auto"
+  },
+  {
+   "name": "value",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": true
+  },
+  {
+   "name": "updated_by",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "audit_logs": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "actor_user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "action",
+   "pg": "character varying(150)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "target_user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "details",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": true,
+   "default": "emptyjson"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "ip_address",
+   "pg": "inet",
+   "kind": "text",
+   "notNull": false
+  }
+ ],
+ "auth_sessions": [
+  {
+   "name": "id",
+   "pg": "uuid",
+   "kind": "uuid",
+   "notNull": true,
+   "default": "uuid",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "token_hash",
+   "pg": "character(64)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "expires_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true
+  },
+  {
+   "name": "revoked_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "ip_address",
+   "pg": "inet",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "user_agent",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "last_seen_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "label",
+   "pg": "character varying(160)",
+   "kind": "text",
+   "notNull": false
+  }
+ ],
+ "blocks": [
+  {
+   "name": "blocker_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "blocked_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "comment_likes": [
+  {
+   "name": "comment_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "comments": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "post_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "parent_comment_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "content",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "deleted_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  }
+ ],
+ "companies": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "owner_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "name",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "slug",
+   "pg": "character varying(220)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "description",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "industry",
+   "pg": "character varying(120)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "location",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "website",
+   "pg": "character varying(255)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "logo_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "cover_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "verified",
+   "pg": "boolean",
+   "kind": "bool",
+   "notNull": true,
+   "default": "bool"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "tagline",
+   "pg": "character varying(220)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "email",
+   "pg": "character varying(160)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "phone",
+   "pg": "character varying(40)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "category",
+   "pg": "character varying(120)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "founded",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "employees",
+   "pg": "character varying(40)",
+   "kind": "text",
+   "notNull": false
+  }
+ ],
+ "company_followers": [
+  {
+   "name": "company_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "company_members": [
+  {
+   "name": "company_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "role",
+   "pg": "character varying(50)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "connections": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "requester_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "recipient_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "status",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "conversation_members": [
+  {
+   "name": "conversation_id",
+   "pg": "uuid",
+   "kind": "uuid",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "joined_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "last_read_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  }
+ ],
+ "conversations": [
+  {
+   "name": "id",
+   "pg": "uuid",
+   "kind": "uuid",
+   "notNull": true,
+   "default": "uuid",
+   "pk": "auto"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "subject",
+   "pg": "character varying(200)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "kind",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  }
+ ],
+ "education": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "institution",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "qualification",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "field_of_study",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "start_date",
+   "pg": "date",
+   "kind": "date",
+   "notNull": false
+  },
+  {
+   "name": "end_date",
+   "pg": "date",
+   "kind": "date",
+   "notNull": false
+  },
+  {
+   "name": "description",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "email_verification_tokens": [
+  {
+   "name": "id",
+   "pg": "uuid",
+   "kind": "uuid",
+   "notNull": true,
+   "default": "uuid",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "token_hash",
+   "pg": "character(64)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "expires_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true
+  },
+  {
+   "name": "used_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "experiences": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "company_name",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "title",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "location",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "description",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "start_date",
+   "pg": "date",
+   "kind": "date",
+   "notNull": false
+  },
+  {
+   "name": "end_date",
+   "pg": "date",
+   "kind": "date",
+   "notNull": false
+  },
+  {
+   "name": "is_current_role",
+   "pg": "boolean",
+   "kind": "bool",
+   "notNull": true,
+   "default": "bool"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "follows": [
+  {
+   "name": "follower_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "following_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "job_applications": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "job_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "applicant_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "cover_letter",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "resume_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "status",
+   "pg": "character varying(30)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "job_listings": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "company_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "created_by",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "title",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "description",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "employment_type",
+   "pg": "character varying(40)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "workplace_type",
+   "pg": "character varying(40)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "location",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "salary_min",
+   "pg": "numeric(14,2)",
+   "kind": "numeric",
+   "notNull": false
+  },
+  {
+   "name": "salary_max",
+   "pg": "numeric(14,2)",
+   "kind": "numeric",
+   "notNull": false
+  },
+  {
+   "name": "currency",
+   "pg": "character varying(10)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "skills",
+   "pg": "text[]",
+   "kind": "array",
+   "notNull": false,
+   "default": "emptyarray"
+  },
+  {
+   "name": "status",
+   "pg": "character varying(30)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "application_deadline",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "opportunity_kind",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "organization",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "organization_logo",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "compensation",
+   "pg": "character varying(120)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "remote",
+   "pg": "boolean",
+   "kind": "bool",
+   "notNull": true,
+   "default": "bool"
+  }
+ ],
+ "listing_categories": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "slug",
+   "pg": "character varying(80)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "name",
+   "pg": "character varying(120)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "icon",
+   "pg": "character varying(60)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  }
+ ],
+ "listing_favorites": [
+  {
+   "name": "listing_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "marketplace_listings": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "seller_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "company_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "title",
+   "pg": "character varying(200)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "description",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "category",
+   "pg": "character varying(100)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "listing_type",
+   "pg": "character varying(30)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "price",
+   "pg": "numeric(14,2)",
+   "kind": "numeric",
+   "notNull": false
+  },
+  {
+   "name": "currency",
+   "pg": "character varying(10)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "location",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "media_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "status",
+   "pg": "character varying(30)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "category_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "images",
+   "pg": "text[]",
+   "kind": "array",
+   "notNull": true,
+   "default": "emptyarray"
+  },
+  {
+   "name": "tags",
+   "pg": "text[]",
+   "kind": "array",
+   "notNull": true,
+   "default": "emptyarray"
+  },
+  {
+   "name": "views",
+   "pg": "integer",
+   "kind": "int",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "price_type",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "condition",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "availability",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "summary",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  }
+ ],
+ "messages": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "conversation_id",
+   "pg": "uuid",
+   "kind": "uuid",
+   "notNull": true
+  },
+  {
+   "name": "sender_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "body",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "attachment_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "edited_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "deleted_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "reaction",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "attachment_name",
+   "pg": "character varying(200)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "shared_listing_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "shared_profile_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  }
+ ],
+ "notifications": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "actor_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "type",
+   "pg": "character varying(60)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "entity_type",
+   "pg": "character varying(60)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "entity_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "title",
+   "pg": "character varying(200)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "body",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "read_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "href",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  }
+ ],
+ "ops_migrations": [
+  {
+   "name": "file",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true,
+   "pk": "auto"
+  },
+  {
+   "name": "applied_by",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "applied_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "password_reset_tokens": [
+  {
+   "name": "id",
+   "pg": "uuid",
+   "kind": "uuid",
+   "notNull": true,
+   "default": "uuid",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "token_hash",
+   "pg": "character(64)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "expires_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true
+  },
+  {
+   "name": "used_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "poll_votes": [
+  {
+   "name": "post_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "option_id",
+   "pg": "integer",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "post_likes": [
+  {
+   "name": "post_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "reaction",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": false
+  }
+ ],
+ "post_shares": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "post_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "posts": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "company_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "content",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "media_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "post_type",
+   "pg": "character varying(30)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "visibility",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "deleted_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "media",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "link_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "poll",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": false
+  },
+  {
+   "name": "hashtags",
+   "pg": "text[]",
+   "kind": "array",
+   "notNull": true,
+   "default": "emptyarray"
+  },
+  {
+   "name": "location",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "comments_disabled",
+   "pg": "boolean",
+   "kind": "bool",
+   "notNull": true,
+   "default": "bool"
+  },
+  {
+   "name": "scheduled_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "edit_source_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "source_post_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "updated_by",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  }
+ ],
+ "profile_skills": [
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "skill_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "proficiency",
+   "pg": "character varying(30)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "profiles": [
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "auto"
+  },
+  {
+   "name": "username",
+   "pg": "character varying(50)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "first_name",
+   "pg": "character varying(80)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "last_name",
+   "pg": "character varying(80)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "headline",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "bio",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "location",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "website",
+   "pg": "character varying(255)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "avatar_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "cover_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "phone",
+   "pg": "character varying(40)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "company_name",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "job_title",
+   "pg": "character varying(180)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "years_experience",
+   "pg": "integer",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "visibility",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "country",
+   "pg": "character varying(120)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "category",
+   "pg": "character varying(120)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "interests",
+   "pg": "text[]",
+   "kind": "array",
+   "notNull": true,
+   "default": "emptyarray"
+  },
+  {
+   "name": "onboarding_done",
+   "pg": "boolean",
+   "kind": "bool",
+   "notNull": true,
+   "default": "bool"
+  },
+  {
+   "name": "open_to",
+   "pg": "text[]",
+   "kind": "array",
+   "notNull": true,
+   "default": "emptyarray"
+  }
+ ],
+ "reports": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "reporter_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "target_type",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "target_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "target_label",
+   "pg": "character varying(220)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "reason",
+   "pg": "character varying(60)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "details",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "status",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "reviews": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "subject_type",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "subject_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "author_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "rating",
+   "pg": "integer",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "body",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "saved_items": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "item_type",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "ref_id",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "collection",
+   "pg": "character varying(80)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "title",
+   "pg": "character varying(220)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "subtitle",
+   "pg": "character varying(220)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "image_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "href",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "saved_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "saved_posts": [
+  {
+   "name": "post_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "pk"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "collection",
+   "pg": "character varying(80)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  }
+ ],
+ "search_history": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "term",
+   "pg": "character varying(200)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "security_events": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "event_type",
+   "pg": "character varying(100)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "ip_address",
+   "pg": "inet",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "user_agent",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "details",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": true,
+   "default": "emptyjson"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "security_rate_limits": [
+  {
+   "name": "key",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true,
+   "pk": "auto"
+  },
+  {
+   "name": "attempts",
+   "pg": "integer",
+   "kind": "int",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "expires_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true
+  }
+ ],
+ "skills": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "name",
+   "pg": "character varying(100)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "staff_activity_logs": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "staff_user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "action",
+   "pg": "character varying(150)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "resource_type",
+   "pg": "character varying(100)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "resource_id",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "ip_address",
+   "pg": "inet",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "details",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": true,
+   "default": "emptyjson"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "support_messages": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "ticket_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "from_user",
+   "pg": "boolean",
+   "kind": "bool",
+   "notNull": true,
+   "default": "bool"
+  },
+  {
+   "name": "body",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "attachment_url",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "support_tickets": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "subject",
+   "pg": "character varying(200)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "category",
+   "pg": "character varying(80)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "status",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "user_goals": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "title",
+   "pg": "character varying(220)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "metric",
+   "pg": "character varying(60)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "target",
+   "pg": "numeric(14,2)",
+   "kind": "numeric",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "current",
+   "pg": "numeric(14,2)",
+   "kind": "numeric",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "due_date",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "user_settings": [
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "pk": "auto"
+  },
+  {
+   "name": "data",
+   "pg": "jsonb",
+   "kind": "json",
+   "notNull": true,
+   "default": "emptyjson"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "user_tasks": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "user_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true
+  },
+  {
+   "name": "title",
+   "pg": "character varying(220)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "description",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "due_date",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "priority",
+   "pg": "character varying(10)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "category",
+   "pg": "character varying(80)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "status",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "assignee_id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": false
+  },
+  {
+   "name": "completed_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  }
+ ],
+ "users": [
+  {
+   "name": "id",
+   "pg": "bigint",
+   "kind": "int",
+   "notNull": true,
+   "default": "sequence",
+   "pk": "auto"
+  },
+  {
+   "name": "username",
+   "pg": "character varying(50)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "email",
+   "pg": "character varying(255)",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "password_hash",
+   "pg": "text",
+   "kind": "text",
+   "notNull": true
+  },
+  {
+   "name": "name",
+   "pg": "character varying(150)",
+   "kind": "text",
+   "notNull": false
+  },
+  {
+   "name": "role",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "status",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "failed_login_attempts",
+   "pg": "integer",
+   "kind": "int",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "locked_until",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "last_login_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "created_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "updated_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": true,
+   "default": "now"
+  },
+  {
+   "name": "account_type",
+   "pg": "character varying(20)",
+   "kind": "text",
+   "notNull": true,
+   "default": "literal"
+  },
+  {
+   "name": "email_verified_at",
+   "pg": "timestamp with time zone",
+   "kind": "ts",
+   "notNull": false
+  },
+  {
+   "name": "verified",
+   "pg": "boolean",
+   "kind": "bool",
+   "notNull": true,
+   "default": "bool"
+  },
+  {
+   "name": "verified_badge",
+   "pg": "text",
+   "kind": "text",
+   "notNull": false
+  }
+ ]
+}

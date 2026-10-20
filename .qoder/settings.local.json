@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -d /workspaces/app-mirror /workspaces/app-mirror/app /workspaces/proffessionalist/professionalist/src 2>&1; echo \"--- any new dirs in /workspaces ---\"; ls /workspaces; echo \"--- token file present? ---\"; ls -la /home/codespace/.cf_token_tmp 2>&1 | head -2)",
+      "Bash(cd /workspaces/proffessionalist/professionalist && echo \"########## d1-probe \\(40 capability probes\\)\" && timeout 280 node cf-api/tools/d1-probe.mjs 2>&1 | tail -22)",
+      "Bash(cd /workspaces/proffessionalist/professionalist && echo \"########## d1-probe2 \\(time formats, codecs, binding rules\\)\" && timeout 280 node cf-api/tools/d1-probe2.mjs 2>&1 | tail -26)"
+    ]
+  }
+}

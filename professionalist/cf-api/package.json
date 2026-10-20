@@ -1,0 +1,9 @@
+{
+  "name": "professionalist-cf-api",
+  "private": true,
+  "type": "commonjs",
+  "description": "Cloudflare Worker port of the professionalist API (D1 + R2 + KV). Isolated from the SPA's ESM setting.",
+  "dependencies": {
+    "bcryptjs": "^3.0.3"
+  }
+}

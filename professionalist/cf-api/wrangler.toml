@@ -1,0 +1,92 @@
+name = "professionalist-api"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The whole migration ships behind this flag first: a workers.dev address is the only way to measure
+# the Worker against the VPS without pointing a real hostname at it.  It is stated rather than left
+# to the default because the preview URL is exactly what must be switched off the moment
+# api.proffessionalist.com is bound here (tools/deploy.mjs --preview also forces MAILER_ENABLED=false
+# while this address is public, so a stranger cannot make the account's mailer deliver resets).
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+# database_id is kept out of this file on purpose; tools/runtime-config.mjs reads it from
+# ~/.qoder/tmp/d1move/d1-id.txt into the generated /workspaces/cf-run/wrangler.toml and never prints it.
+database_name = "professionalist-db-v2"
+database_id = "placeholder"
+
+# src/shims/upload.js:53-56 reads env.MEDIA and throws if it is missing, and its UPLOAD_ROOT stays
+# "/uploads" so every media URL already in the database keeps resolving (§1 success criterion 2).
+# The bucket is still to be created with the 39 backfilled files (#21).
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "professionalist-media"
+
+# src/shims/limit.js:20 requires env.RATE_COUNTERS with idFromName before any limiter is mounted, so
+# this is not optional: without the binding the Worker refuses every request instead of counting.
+# A Durable Object rather than the KV namespace §4 of the handoff still names: KV is eventually
+# consistent and allows roughly one write per key per second, and one page load fires several
+# parallel API calls at the same client IP — the rejected writes would silently under-count, so a
+# visitor could get a 429 late or never. See the WHY block in src/shims/limit.js:1-13.
+[[durable_objects.bindings]]
+name = "RATE_COUNTERS"
+class_name = "RateLimiter"
+
+# The lifecycle record for that namespace. Without a migrations section `wrangler dev` works but
+# `wrangler deploy` refuses to ship it, because creating a Durable Object class is a data-losing
+# event unless the deploy says so explicitly. Measured with wrangler 4.151.2 on this exact pair of
+# blocks: with only [[durable_objects.bindings]] dev prints "you have configured durable_objects
+# exported by this Worker (RateLimiter), but no live exports entry for them"; adding this section
+# makes that warning go away; and [[migrations]] together with [exports.*] is a hard error
+# ("migrations and exports are mutually exclusive"), so the legacy form the D1 and R2 blocks above
+# already use has to be finished with a migration rather than half-switched.
+# The tag is a one-way ledger entry: keep it, and add a new [[migrations]] block per future change.
+# new_sqlite_classes, not new_classes: this account refuses new key-value namespaces outright —
+# measured 2026-10-20, the first deploy attempt came back with API code 10099, "Creating new
+# key-value backed Durable Object namespaces is no longer supported on this account. Please create a
+# namespace using a `new_sqlite_classes` migration instead."  src/worker.js needs no change: it only
+# ever uses state.storage.get/put for the whole "buckets" snapshot, and the SQLite-backed class keeps
+# that key/value surface exactly.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiter"]
+
+# Non-secret settings only. JWT_SECRET, OPS_TOKEN and MAILER_API_TOKEN are secrets and are set with
+# `wrangler secret put` — they must never appear here; src/api.js's ENV_HANDOFF copies whatever
+# arrives on env into process.env, which is where the ported route files read them (server.js and
+# the mirror's module-scope reads).
+#
+# The values below are the ones measured on the live VPS today, so the Worker cannot drift from what
+# the site already answers. The ones that only mirror the code's own default are commented out:
+# leaving a name unset is exactly equal to setting it to the default the file falls back to, so an
+# unverified production override can be read off the VPS's EnvironmentFile at cutover rather than
+# invented here.
+[vars]
+# server.js:29-30, and the ACAO echo at api.proffessionalist.com confirms both origins are in the
+# allowlist (measured 2026-10-19); CORS_ORIGIN is a list of public browser origins, not a secret.
+CORS_ORIGIN = "https://proffessionalist.com,https://www.proffessionalist.com"
+# server.js:69 — live header was `RateLimit-Policy: "3000-in-15min"; q=3000; w=900`.
+IP_RATE_LIMIT = "3000"
+
+# defaults, verify against the VPS env before the hostname flip:
+# BODY_LIMIT = "1mb"                                    # server.js:37-38
+# USER_RATE_LIMIT = "400"                               # server.js:78
+# AUTH_RATE_LIMIT = "100"                               # server.js:94
+# JWT_EXPIRES_IN = "2h"                                 # routes/auth.js:28
+# SESSION_TTL_SECONDS = "604800"                        # routes/auth.js:17
+# MAX_LOGIN_FAILURES = "5"                              # routes/auth.js:15
+# LOCKOUT_MINUTES = "15"                                # routes/auth.js:16
+# EMAIL_VERIFY_TTL_HOURS = "24"                         # services/emailTokens.js:15
+# PASSWORD_RESET_TTL_MINUTES = "60"                     # services/emailTokens.js:16
+# MAILER_TIMEOUT_MS = "8000"                            # services/mailer.js:17
+# MAILER_ENABLED = "true"                               # services/mailer.js:18
+# OPS_OWNER_ID                                          # routes/spa/ops.js:72 — an account id, so it
+#                                                       # goes in as a secret, not here
+# MAILER_API_URL                                         # services/mailer.js:15 — required or mail
+#                                                       # silently stops (mailer.js:79-85 warns once)
+
+# No [triggers]: the VPS has no cron and nothing in this Worker needs one (§3, "no cron, no
+# background writers").  src/worker.js therefore exports no scheduled() handler; adding a cron here
+# would cost a billable invocation per minute to run code that does nothing.
